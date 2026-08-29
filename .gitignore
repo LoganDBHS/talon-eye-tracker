@@ -1,0 +1,4 @@
+# never commit personal Talon data if copied here by accident
+calib.bin
+*.log
+*.flag
