@@ -2,7 +2,8 @@ import ctypes
 import os
 import time
 
-from talon import Module, actions, app, cron, ctrl, tap
+from talon import Module, actions, app, cron, ctrl, settings, tap
+from talon.types import Point2d
 from talon_plugins import eye_zoom_mouse
 
 mod = Module()
@@ -130,6 +131,7 @@ class Actions:
         """Open the zoom overlay at gaze; does nothing while already zoomed"""
         zm = eye_zoom_mouse.zoom_mouse
         if zm.enabled and zm.state == eye_zoom_mouse.STATE_IDLE:
+            _freeze_head_offset()
             zm.on_pop(0)
 
     def zoom_mouse_cancel():
@@ -240,4 +242,92 @@ def _auto_enable():
 
 
 app.register("ready", lambda: cron.after("3s", _auto_enable))
+
+
+# --- head offset / gaze gain integration (head_offset.py) ------------------------
+# The zoom overlay opens around the GAZE point and its dot follows raw gaze, so
+# without this the zoom would ignore the head offset and gain correction the
+# control-mouse cursor has. eye_zoom_mouse reads gaze through the legacy
+# EyeMouse's `mouse.eye_hist` (module global `mouse`); we swap that name for a
+# proxy whose eye_hist yields frames with the same correction applied. The head
+# offset is FROZEN at pop time so relaxing your head inside the zoom doesn't
+# slide the dot. Setting user.zoom_follows_head_offset = 0 disables this.
+try:
+    from . import head_offset as _head_offset
+except Exception as _ex:  # head_offset.py absent or broken: zoom stays stock
+    _head_offset = None
+    print(f"[zoom_pop] head_offset not available, zoom uses raw gaze: {_ex}")
+
+mod.setting(
+    "zoom_follows_head_offset",
+    type=int,
+    default=1,
+    desc="1 = the F4 zoom opens where the head-offset/gain-corrected cursor is; 0 = stock behaviour (raw gaze)",
+)
+
+_frozen_offset = [(0.0, 0.0)]
+
+
+def _freeze_head_offset():
+    if _head_offset is not None:
+        _frozen_offset[0] = _head_offset.offset_px()
+
+
+class _ShiftedEye:
+    __slots__ = ("gaze", "rel", "detected")
+
+    def __init__(self, eye, gaze):
+        self.gaze = gaze
+        self.rel = eye.rel
+        self.detected = eye.detected
+
+    def __bool__(self):
+        return bool(self.detected)
+
+
+class _ShiftedFrame:
+    """Looks enough like a GazeFrame for eye_zoom_mouse: iterates as (left, right)."""
+    __slots__ = ("left", "right", "ts")
+
+    def __init__(self, frame, rect, offset):
+        self.ts = frame.ts
+        self.left = self._shift(frame.left, rect, offset)
+        self.right = self._shift(frame.right, rect, offset)
+
+    @staticmethod
+    def _shift(eye, rect, offset):
+        g = eye.gaze
+        px = rect.x + g.x * rect.width
+        py = rect.y + g.y * rect.height
+        cx, cy = _head_offset.transform_px(px, py, offset)
+        return _ShiftedEye(eye, Point2d((cx - rect.x) / rect.width, (cy - rect.y) / rect.height))
+
+    def __iter__(self):
+        yield self.left
+        yield self.right
+
+
+class _EyeMouseProxy:
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    @property
+    def eye_hist(self):
+        hist = self._real.eye_hist
+        if _head_offset is None or not settings.get("user.zoom_follows_head_offset"):
+            return hist
+        rect = eye_zoom_mouse.eye_config.rect
+        off = _frozen_offset[0]
+        # only the tail is ever read (eye_avg = 20 frames); keep it cheap
+        return [_ShiftedFrame(f, rect, off) for f in hist[-32:]]
+
+
+if _head_offset is not None:
+    _real_mouse = getattr(eye_zoom_mouse.mouse, "_real", eye_zoom_mouse.mouse)
+    eye_zoom_mouse.mouse = _EyeMouseProxy(_real_mouse)
+    print("[zoom_pop] zoom overlay follows head offset / gaze gain (user.zoom_follows_head_offset)")
+
 print("[zoom_pop] module loaded; AHK bridge flag poller running")

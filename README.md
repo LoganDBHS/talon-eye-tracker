@@ -44,3 +44,27 @@ Clicks are synthesized with a raw `SendInput` batch (absolute move + down + up i
 ## Known issue (open)
 
 Tap-tap double-click in Explorer still doesn't register even though logs show two atomic clicks at the identical pixel ~130ms apart. Under investigation; `Shift`+click double-commit is the workaround.
+
+## Head-pitch cursor offset layer (added 2026-08-31)
+
+Gaze accuracy falls off toward the edges and the user reaches the top of the
+32" screen by pitching the head up — which Tobii's head-compensated gaze cancels
+out. The Tobii 5 gives Talon **no head-rotation data** (only the two 3-D
+eyeball positions), so `talon/eye_tracking_only/head_offset.py` infers pitch
+from the eye-centre's rise along the screen axis (and yaw from the inter-ocular
+vector), turns that into a cursor offset on top of Talon's control mouse, and
+also carries an optional gaze gain/curve correction. All knobs are live
+settings in `head_tracking_settings.talon`; `tracking_diag.py` logs the raw
+head data on demand and `gaze_measure.py` measures the implied gaze gain.
+
+| Key | Action |
+|---|---|
+| `Ctrl+Alt+H` | head offset on/off |
+| `Ctrl+Alt+R` | re-centre (current pose = neutral) |
+| `Ctrl+Alt+D` | tracking diagnostic logger on/off |
+| `Ctrl+Alt+M` | gaze gain measurement overlay (Esc cancels) |
+
+Full details, tuning table and gotchas: `talon/eye_tracking_only/README.md`.
+Findings: the public Talon build is still 0.4.0 (Jul 2023) and already has the
+Gaze/Head Control toggles (tray → Eye Tracking); the newer settings in the
+changelog are Patreon-beta only.
