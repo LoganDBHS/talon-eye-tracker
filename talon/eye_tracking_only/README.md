@@ -64,9 +64,11 @@ target by re-reading the cursor through a path the wrapper couldn't see.)
 The hook is registered in Talon's own tracking context and survives reloads of
 this folder; `user.head_offset_uninstall()` restores the raw stream.
 
-The neutral pose is saved in `%APPDATA%\Talon\head_offset_anchor.json` and
-follows your head at two speeds: fast within `head_recenter_zone_mm` (posture
-drift), slowly beyond it (a deliberate tilt holds for about a minute).
+The neutral pose ("resting head, facing the centre") is the running average of
+the head pose taken **only while the gaze is in the middle of the screen**
+(`head_neutral_zone`, `head_neutral_seconds`): you tilt to reach edges, never to
+look at the centre, so it tracks posture by itself and never adapts during a
+tilt. Saved in `%APPDATA%\Talon\head_offset_anchor.json`; ctrl-alt-r overrides.
 
 The F4 zoom follows the same correction (the overlay opens where the offset
 cursor is; the offset is frozen while the overlay is open). Disable with
@@ -82,7 +84,7 @@ Edit `head_tracking_settings.talon`, save; values apply within 250 ms.
 | Cursor overshoots / feels twitchy on tilt | lower `user.head_gain_y`, or raise `user.head_smoothing_ms` (80 → 150) |
 | Breathing / small posture moves the cursor | raise `user.head_deadzone_y_mm` (3 → 5) |
 | First part of a tilt does nothing | lower `user.head_deadzone_y_mm` (3 → 1.5) |
-| Cursor drifts over minutes (slouching) | press ctrl-alt-r; or set `user.head_recenter_seconds = 60` (also slowly cancels a *held* tilt) |
+| Cursor drifts over minutes (slouching) | glance at the middle of the screen for a few seconds (neutral re-learns there); lower `user.head_neutral_seconds` to make that faster; ctrl-alt-r forces it |
 | Cursor sits pushed after I sit back down | ctrl-alt-r (or wait: `user.head_lost_recenter_seconds` re-anchors after you were away ≥ 5 s) |
 | Want head-turn to reach the side edges | `user.head_gain_x = 8` (0 = off); `user.head_deadzone_x_deg` ≥ 1 |
 | Cursor lags the head | lower `user.head_smoothing_ms` (80 → 40) |

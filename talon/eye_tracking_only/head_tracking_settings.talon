@@ -26,16 +26,17 @@ settings():
     user.head_smoothing_ms = 80.0
     # clamp on the offset per axis (cursor mm). 0 = no clamp.
     user.head_max_offset_mm = 400.0
-    # ---- neutral pose ("what counts as not tilted") ----
-    # The neutral pose is saved to %APPDATA%\Talon\head_offset_anchor.json and
-    # survives reloads/restarts. It follows your head with two speeds:
-    #   within head_recenter_zone_mm of neutral -> fast (posture drift, slouching)
-    #   further away (a deliberate tilt)        -> slow (a held tilt keeps working)
-    # Small tilts (< zone) fade out in a few seconds; big ones hold ~a minute.
-    # ctrl-alt-r re-centres immediately. 0 = never follow.
-    user.head_recenter_seconds = 20.0
-    user.head_recenter_fast_seconds = 3.0
-    user.head_recenter_zone_mm = 6.0
+    # ---- neutral pose ("resting head, facing the centre") ----
+    # The neutral pose is the running average of your head height taken ONLY
+    # while your gaze is in the middle of the screen (you tilt to reach edges,
+    # never to look at the centre). So it tracks posture by itself and never
+    # adapts during a tilt - a held tilt keeps working indefinitely. Saved to
+    # %APPDATA%\Talon\head_offset_anchor.json across restarts; ctrl-alt-r
+    # overrides it immediately.
+    # seconds: lower = follows posture faster (5 is a few glances at the middle)
+    user.head_neutral_seconds = 5.0
+    # how far from centre still counts as "the middle" (0.2 = middle 40%)
+    user.head_neutral_zone = 0.2
 
     # ---- edge behaviour ----
     # magnet: corrected gaze within this many px of an edge snaps onto it.

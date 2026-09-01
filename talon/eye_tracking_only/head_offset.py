@@ -25,9 +25,11 @@ HOW IT WORKS (rewritten 2026-09-01)
   the cursor position through a path the wrapper couldn't see.)
 
   Head offset = gain * (pose - neutral) beyond a dead zone, low-passed, clamped.
-  The neutral pose is persisted to %APPDATA%/Talon/head_offset_anchor.json and
-  follows the head at two speeds: fast when within head_recenter_zone_mm of
-  neutral (posture drift, slouching), slow when further away (a held tilt).
+  The neutral pose ("resting head facing the centre") is the running average of
+  the head pose taken only while the RAW gaze is in the central zone of the
+  screen - you tilt to reach edges, never to look at the middle - so it tracks
+  posture by itself and never adapts during a tilt. Persisted to
+  %APPDATA%/Talon/head_offset_anchor.json across restarts.
 
   Per frame: a few multiplies, an EMA and three small object copies (~90 Hz).
   When the layer is off AND the gaze correction is identity, frames pass
@@ -75,15 +77,13 @@ _SETTINGS = {
                   "lower = snappier but shakier. 0 = raw."),
     "max_mm": ("head_max_offset_mm", 400.0,
                "Clamp on the head offset magnitude in cursor mm (per axis). 0 = no clamp."),
-    "recenter_s": ("head_recenter_seconds", 60.0,
-                   "Time constant (s) with which the neutral pose follows the head when the head is FAR from "
-                   "neutral (a deliberate tilt). Slow = a held tilt lasts; 0 = never. ctrl-alt-r re-centres at once."),
-    "fast_s": ("head_recenter_fast_seconds", 3.0,
-               "Time constant (s) when the head is NEAR neutral (within head_recenter_zone_mm): absorbs "
-               "posture drift, breathing, slouching. 0 = never."),
-    "zone_mm": ("head_recenter_zone_mm", 12.0,
-                "Head rise (mm) below which the fast re-centring applies. Tilts smaller than this fade out in a "
-                "few seconds; larger ones hold. Raise if small deliberate tilts keep fading."),
+    "neutral_s": ("head_neutral_seconds", 5.0,
+                  "The neutral ('resting, facing the centre') pose is the running average of the head pose taken "
+                  "ONLY while the gaze is in the central part of the screen; this is its time constant (s). "
+                  "Lower = follows posture faster; 0 = frozen (ctrl-alt-r only)."),
+    "neutral_zone": ("head_neutral_zone", 0.2,
+                     "How far from the screen centre (fraction of the screen, 0.2 = middle 40%) the gaze may be "
+                     "for the head to count as resting. Tilts happen when looking near the edges, never here."),
     "lost_s": ("head_lost_recenter_seconds", 5.0,
                "If the eyes were not seen for this many seconds (you got up), the next pose becomes the new "
                "neutral. 0 = never."),
@@ -362,10 +362,14 @@ def _on_gaze(frame):
         st.a_rise += b * (st.s_rise - st.a_rise)
         st.a_yaw += b * (st.s_yaw - st.a_yaw)
     else:
-        # near neutral: follow fast (posture drift); far: follow slowly (held tilt)
-        tau_a = c["fast_s"] if abs(st.s_rise - st.a_rise) < c["zone_mm"] else c["recenter_s"]
-        if tau_a > 0:
-            b = min(dt / tau_a, 1.0)
+        # "resting head facing the centre": adapt the neutral pose only while
+        # the RAW gaze is in the central zone - you tilt to reach edges, never
+        # to look at the middle, so this tracks posture but never a tilt
+        g = frame.gaze
+        z = c["neutral_zone"]
+        if (c["neutral_s"] > 0 and g is not None and (frame.left.detected or frame.right.detected)
+                and abs(g.x - 0.5) < z and abs(g.y - 0.5) < z):
+            b = min(dt / c["neutral_s"], 1.0)
             st.a_rise += b * (st.s_rise - st.a_rise)
             st.a_yaw += b * (st.s_yaw - st.a_yaw)
 
