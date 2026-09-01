@@ -99,6 +99,12 @@ _SETTINGS = {
     "q_down": ("gaze_curve_down", 0.0, "Quadratic term toward the BOTTOM edge."),
     "rot": ("gaze_map_rotation_deg", 0.0,
             "Rotation of the gaze map as MEASURED by ctrl-alt-m (deg, + = clockwise); it is undone here."),
+    "snap_px": ("gaze_edge_snap_px", 30.0,
+                "Edge magnet: a corrected gaze point within this many px of a screen edge is snapped onto the "
+                "edge (menu bars, scrollbars, corners). 0 = off."),
+    "mirror": ("gaze_mirror_lost_eye", 1.0,
+               "1 = when the tracker loses one eye (happens at the top corners), feed Talon the surviving eye's "
+               "gaze for both eyes instead of letting it blend in a stale prediction. 0 = off."),
 }
 for _key, (_name, _default, _desc) in _SETTINGS.items():
     mod.setting(_name, type=float, default=_default, desc=_desc)
@@ -120,7 +126,7 @@ def _refresh_settings():
     c = _cfg
     _identity[0] = (c["k_left"] == 1.0 and c["k_right"] == 1.0 and c["k_up"] == 1.0 and c["k_down"] == 1.0
                     and c["q_left"] == 0.0 and c["q_right"] == 0.0 and c["q_up"] == 0.0 and c["q_down"] == 0.0
-                    and c["rot"] == 0.0)
+                    and c["rot"] == 0.0 and c["snap_px"] == 0.0)
     # also runs every 250 ms: drop a stale offset once the eyes have been gone
     st = _st
     if st.last_seen and st.offset_px != (0.0, 0.0) and time.perf_counter() - st.last_seen > LOST_ZERO_S:
@@ -199,8 +205,20 @@ def _transform(x, y, offset=None):
     X = g.cx + u * g.hx + ox
     Y = g.cy + v * g.hy + oy
     r = g.rect
-    X = min(max(X, r.x), r.x + r.width - 1)
-    Y = min(max(Y, r.y), r.y + r.height - 1)
+    x0, x1 = r.x, r.x + r.width - 1
+    y0, y1 = r.y, r.y + r.height - 1
+    s = c["snap_px"]
+    if s > 0:   # edge magnet
+        if X < x0 + s:
+            X = x0
+        elif X > x1 - s:
+            X = x1
+        if Y < y0 + s:
+            Y = y0
+        elif Y > y1 - s:
+            Y = y1
+    X = min(max(X, x0), x1)
+    Y = min(max(Y, y0), y1)
     return X, Y
 
 
@@ -213,15 +231,35 @@ def _correct_norm(p):
 
 def _corrected_frame(frame):
     """Copy of the GazeFrame with gaze points corrected; the original if nothing to do."""
-    if _identity[0] and _st.offset_px == (0.0, 0.0):
+    l, r = frame.left, frame.right
+    one_eye = _cfg["mirror"] and (l.detected != r.detected)
+    if _identity[0] and _st.offset_px == (0.0, 0.0) and not one_eye:
         return frame
     f = copy.copy(frame)
-    if frame.gaze is not None:
-        f.gaze = _correct_norm(frame.gaze)
-    for name in ("left", "right"):
-        eye = getattr(frame, name)
+    if one_eye:
+        # the tracker drops one eye at the top corners; Talon would blend the
+        # survivor with a stale prediction of the lost eye and park the cursor
+        # short of the edge - give it the survivor for both eyes instead
+        good = l if l.detected else r
+        lost = r if l.detected else l
+        m = copy.copy(lost)
+        m.detected = True
+        m.validity = good.validity
+        m.gaze = good.gaze
+        m.gaze3d = good.gaze3d
+        if l.detected:
+            f.right = m
+        else:
+            f.left = m
+        f.gaze = good.gaze
+        frame_gaze, eyes = good.gaze, (f.left, f.right)
+    else:
+        frame_gaze, eyes = frame.gaze, (l, r)
+    if frame_gaze is not None:
+        f.gaze = _correct_norm(frame_gaze)
+    for name, eye in zip(("left", "right"), eyes):
         if eye.detected and eye.gaze is not None:
-            e = copy.copy(eye)
+            e = eye if eye is not getattr(frame, name) else copy.copy(eye)
             e.gaze = _correct_norm(eye.gaze)
             setattr(f, name, e)
     return f

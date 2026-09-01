@@ -8,10 +8,12 @@ settings():
     # cursor mm per mm of head rise. A comfortable look-up raises the eyes
     # ~25-35 mm; half the screen is 196 mm, so ~6 reaches the top edge from
     # centre. Cursor stops short of the top -> raise; overshoots/jittery -> lower.
-    user.head_gain_y = 6.0
+    # (recorded 2026-09-01: your natural look-up is only 8-16 mm of rise, so
+    # gain 8 / dead zone 3 -> 150-380 px of lift)
+    user.head_gain_y = 8.0
     # mm of rise ignored around neutral. Nodding/breathing moves the cursor ->
     # raise. First bit of a tilt does nothing -> lower.
-    user.head_deadzone_y_mm = 5.0
+    user.head_deadzone_y_mm = 3.0
 
     # ---- horizontal (head yaw in degrees; 0 = disabled) ----
     # cursor mm per degree of yaw. 8-12 is a sensible start if you enable it.
@@ -31,9 +33,16 @@ settings():
     #   further away (a deliberate tilt)        -> slow (a held tilt keeps working)
     # Small tilts (< zone) fade out in a few seconds; big ones hold ~a minute.
     # ctrl-alt-r re-centres immediately. 0 = never follow.
-    user.head_recenter_seconds = 60.0
+    user.head_recenter_seconds = 20.0
     user.head_recenter_fast_seconds = 3.0
-    user.head_recenter_zone_mm = 12.0
+    user.head_recenter_zone_mm = 6.0
+
+    # ---- edge behaviour ----
+    # magnet: corrected gaze within this many px of an edge snaps onto it.
+    user.gaze_edge_snap_px = 30.0
+    # the tracker drops one eye at the top corners; 1 = feed Talon the surviving
+    # eye for both (otherwise it parks the cursor 60-90 px short of the edge).
+    user.gaze_mirror_lost_eye = 1
     # eyes unseen for this long (you got up) -> next pose is the new neutral.
     user.head_lost_recenter_seconds = 5.0
 
