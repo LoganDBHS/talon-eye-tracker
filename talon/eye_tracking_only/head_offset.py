@@ -1,5 +1,5 @@
-"""Head-pose cursor offset + gaze gain correction, layered on Talon's built-in
-Control Mouse (talon.plugins.eye_mouse_2, "Control Mouse 2").
+"""Head-pose cursor offset + gaze correction, applied UPSTREAM of Talon's
+built-in Control Mouse (talon.plugins.eye_mouse_2, "Control Mouse 2").
 
 WHY THIS EXISTS (2026-08-31)
   Talon 0.4.0's Head Control only nudges the cursor by the *translation* of the
@@ -15,50 +15,55 @@ WHY THIS EXISTS (2026-08-31)
     * horizontal: "yaw"  = heading of the left->right eye vector (degrees). This
                   IS a real rotation; pure sideways head translation leaves it 0.
 
-HOW IT WORKS
-  * subscribes to the tracker's 'gaze' stream (one cheap callback per frame,
-    ~90 Hz: a few multiplies, an EMA, no allocation)
-  * keeps a smoothed head pose and an "anchor" (neutral pose). Offset =
-    gain * (pose - anchor) beyond a dead zone, clamped to head_max_offset_mm.
-  * replaces the `ctrl` name inside eye_mouse_2 with a proxy: every
-    ctrl.mouse_move(x, y) Talon's control mouse makes gets the gaze gain
-    correction (Task 4 fallback; identity by default) and the head offset added,
-    then is clamped to the screen. ctrl.mouse_pos() is un-offset for Talon so
-    its "did the user touch the physical mouse?" detection keeps working.
-  * if the head moves while the gaze target is steady, Talon issues no move, so
-    the gaze callback re-applies the last target itself - unless something else
-    (hand mouse, zoom overlay) has moved the cursor since, in which case it
-    backs off and lets Talon resume normally.
+HOW IT WORKS (rewritten 2026-09-01)
+  The gaze frames the control mouse receives are replaced by corrected copies:
+  gaze point (and per-eye gaze) -> gaze gain/curve/rotation correction (from
+  ctrl-alt-m) -> plus the head offset -> clamped to the screen. Talon then does
+  ALL the smoothing / jump logic on already-corrected data; nothing intercepts
+  its cursor moves. (The first version wrapped ctrl.mouse_move instead; that
+  made the cursor stutter because Talon glides toward its target by re-reading
+  the cursor position through a path the wrapper couldn't see.)
+
+  Head offset = gain * (pose - neutral) beyond a dead zone, low-passed, clamped.
+  The neutral pose is persisted to %APPDATA%/Talon/head_offset_anchor.json and
+  follows the head at two speeds: fast when within head_recenter_zone_mm of
+  neutral (posture drift, slouching), slow when further away (a held tilt).
+
+  Per frame: a few multiplies, an EMA and three small object copies (~90 Hz).
+  When the layer is off AND the gaze correction is identity, frames pass
+  through untouched.
 
 LIVE TUNING: every knob is a `user.*` setting in head_tracking_settings.talon -
 edit, save, done (re-read every 250 ms). Hotkeys in head_tracking.talon:
-  ctrl-alt-h toggle the offset, ctrl-alt-r re-centre (current pose = neutral).
+  ctrl-alt-h toggle the head offset, ctrl-alt-r re-centre (current pose = neutral).
 
 Nothing here touches community or talon_plugins files.
 """
+import copy
 import json
 import math
 import os
 import time
 
-from talon import Module, app, cron, ctrl as _real_ctrl, settings, tracking_system, ui
+from talon import Module, app, cron, settings, tracking_system, ui
 from talon.plugins import eye_mouse_2 as _em2
 from talon.scripting import rctx
+from talon.types import Point2d
 from talon_init import TALON_HOME
 
 from . import tracking_diag
 from .tracking_diag import head_from_frame
 
 mod = Module()
-_ctx = rctx.active()  # this module's resource context (used for late registrations)
+_ctx = rctx.active()
 
 # key -> (setting name, default, description). All floats.
 _SETTINGS = {
     "gain_y": ("head_gain_y", 6.0,
                "Vertical head gain: cursor mm per mm of head rise (eye-centre moving up the screen's axis). "
                "Higher = a smaller head tilt reaches the top edge; too high = jitter/overshoot. 0 disables vertical."),
-    "dead_y": ("head_deadzone_y_mm", 3.0,
-               "Head rise (mm) ignored around the neutral pose. Raise if breathing/posture moves the cursor; "
+    "dead_y": ("head_deadzone_y_mm", 5.0,
+               "Head rise (mm) ignored around the neutral pose. Raise if nodding/posture moves the cursor; "
                "lower if the first part of a tilt does nothing."),
     "gain_x": ("head_gain_x", 0.0,
                "Horizontal head gain: cursor mm per degree of head yaw (turning left/right). 0 = off. "
@@ -66,7 +71,7 @@ _SETTINGS = {
     "dead_x": ("head_deadzone_x_deg", 1.5,
                "Head yaw (degrees) ignored around neutral. Yaw noise is ~1 deg, so keep >= 1."),
     "smooth_ms": ("head_smoothing_ms", 80.0,
-                  "Time constant (ms) of the head-pose low-pass. Higher = steadier but laggier cursor; "
+                  "Time constant (ms) of the head-pose low-pass. Higher = steadier but laggier; "
                   "lower = snappier but shakier. 0 = raw."),
     "max_mm": ("head_max_offset_mm", 400.0,
                "Clamp on the head offset magnitude in cursor mm (per axis). 0 = no clamp."),
@@ -99,6 +104,7 @@ for _key, (_name, _default, _desc) in _SETTINGS.items():
     mod.setting(_name, type=float, default=_default, desc=_desc)
 
 _cfg = {k: v[1] for k, v in _SETTINGS.items()}
+_identity = [True]      # True when the gaze correction settings are all neutral
 
 ANCHOR_SETTLE_S = 2.0   # neutral pose follows the head quickly for this long after (re)acquisition
 LOST_ZERO_S = 1.0       # eyes unseen this long -> offset decays to zero (no stale push)
@@ -111,11 +117,14 @@ def _refresh_settings():
             _cfg[key] = float(v) if v is not None else default
         except Exception:
             pass
+    c = _cfg
+    _identity[0] = (c["k_left"] == 1.0 and c["k_right"] == 1.0 and c["k_up"] == 1.0 and c["k_down"] == 1.0
+                    and c["q_left"] == 0.0 and c["q_right"] == 0.0 and c["q_up"] == 0.0 and c["q_down"] == 0.0
+                    and c["rot"] == 0.0)
     # also runs every 250 ms: drop a stale offset once the eyes have been gone
     st = _st
     if st.last_seen and st.offset_px != (0.0, 0.0) and time.perf_counter() - st.last_seen > LOST_ZERO_S:
         st.offset_px = (0.0, 0.0)
-        _reapply()
     _save_anchor()
 
 
@@ -153,11 +162,6 @@ class _State:
     settle_until = 0.0         # anchor follows the head fast until this timestamp
     offset_px = (0.0, 0.0)     # current head offset, pixels (tuple = atomic swap)
     frames = 0
-    # proxy bookkeeping
-    last_raw = None            # last (x, y) Talon's control mouse asked for
-    last_real = None           # where we actually put the cursor
-    applied = (0.0, 0.0)       # last_real - last_raw
-    last_reapply = 0.0
 
 
 _st = _State()
@@ -172,7 +176,7 @@ def _deadzone(d, dz):
 
 
 def _transform(x, y, offset=None):
-    """Raw control-mouse target -> gain-corrected, head-offset, screen-clamped target.
+    """Raw gaze pixel -> rotation-corrected, per-side gain/curve, head-offset, screen-clamped pixel.
     `offset` overrides the live head offset (px) - the zoom mouse freezes it."""
     g, c = _geo, _cfg
     dx, dy = x - g.cx, y - g.cy
@@ -200,64 +204,91 @@ def _transform(x, y, offset=None):
     return X, Y
 
 
-# --- the ctrl proxy seen by eye_mouse_2 ----------------------------------------
-class _CtrlProxy:
-    _is_head_offset_proxy = True
-
-    def __init__(self, real):
-        self._real = real
-
-    def __getattr__(self, name):
-        return getattr(self._real, name)
-
-    def mouse_move(self, x, y, **kw):
-        st = _st
-        st.last_raw = (x, y)
-        rx, ry = _transform(x, y)
-        st.applied = (rx - x, ry - y)
-        st.last_real = (rx, ry)
-        return self._real.mouse_move(rx, ry, **kw)
-
-    def mouse_pos(self):
-        px, py = self._real.mouse_pos()
-        ax, ay = _st.applied
-        return (px - ax, py - ay)
-
-    def mouse_click(self, *a, **kw):
-        if kw.get("pos"):
-            kw["pos"] = _transform(*kw["pos"])
-        return self._real.mouse_click(*a, **kw)
-
-    def mouse_scroll(self, *a, **kw):
-        if kw.get("pos"):
-            kw["pos"] = _transform(*kw["pos"])
-        return self._real.mouse_scroll(*a, **kw)
+def _correct_norm(p):
+    """Normalized (0..1) gaze point -> corrected normalized point."""
+    r = _geo.rect
+    X, Y = _transform(r.x + p.x * r.width, r.y + p.y * r.height)
+    return Point2d((X - r.x) / r.width, (Y - r.y) / r.height)
 
 
-def _reapply():
-    """Head moved but Talon's target didn't: move the cursor ourselves."""
-    st = _st
-    if st.last_raw is None or st.last_real is None or not _em2.control2.running:
-        return
-    now = time.perf_counter()
-    if now - st.last_reapply < 0.012:
-        return
+def _corrected_frame(frame):
+    """Copy of the GazeFrame with gaze points corrected; the original if nothing to do."""
+    if _identity[0] and _st.offset_px == (0.0, 0.0):
+        return frame
+    f = copy.copy(frame)
+    if frame.gaze is not None:
+        f.gaze = _correct_norm(frame.gaze)
+    for name in ("left", "right"):
+        eye = getattr(frame, name)
+        if eye.detected and eye.gaze is not None:
+            e = copy.copy(eye)
+            e.gaze = _correct_norm(eye.gaze)
+            setattr(f, name, e)
+    return f
+
+
+# --- hook into the control mouse's gaze subscription ------------------------------
+_orig_on_gaze = _em2.BaseControlMouse.on_gaze.__get__(_em2.control2)
+
+
+def _em2_on_gaze(frame):
+    _orig_on_gaze(_corrected_frame(frame))
+
+
+_em2_on_gaze._head_offset_wrapper = True
+
+
+def _tracking_ctx():
+    for cb, ctx in list(tracking_system.events.get("gaze", [])):
+        if cb == _orig_on_gaze or getattr(cb, "_head_offset_wrapper", False):
+            return ctx
+    return None
+
+
+def _install():
+    ctx = _tracking_ctx()
+    was_registered = False
+    for cb, _c in list(tracking_system.events.get("gaze", [])):
+        if cb == _orig_on_gaze or getattr(cb, "_head_offset_wrapper", False):
+            try:
+                tracking_system.unregister("gaze", cb)
+                was_registered = True
+            except Exception:
+                pass
+    # future start()/stop() of the control mouse (ctrl-alt-e) register self.on_gaze -> our wrapper
+    _em2.control2.on_gaze = _em2_on_gaze
+    if was_registered:
+        if ctx is not None:
+            with ctx.enter():          # owned by Talon's tracking context, not by this module
+                tracking_system.register("gaze", _em2_on_gaze)
+        else:
+            tracking_system.register("gaze", _em2_on_gaze)
+    return was_registered
+
+
+def _uninstall():
+    ctx = _tracking_ctx()
+    was = False
+    for cb, _c in list(tracking_system.events.get("gaze", [])):
+        if getattr(cb, "_head_offset_wrapper", False):
+            try:
+                tracking_system.unregister("gaze", cb)
+                was = True
+            except Exception:
+                pass
     try:
-        px, py = _real_ctrl.mouse_pos()
-    except Exception:
-        return
-    lx, ly = st.last_real
-    if abs(px - lx) > 1.5 or abs(py - ly) > 1.5:
-        return  # hand mouse / zoom overlay moved it: don't fight, Talon will resume
-    rx, ry = _transform(*st.last_raw)
-    if abs(rx - lx) < 0.5 and abs(ry - ly) < 0.5:
-        return
-    st.last_reapply = now
-    st.applied = (rx - st.last_raw[0], ry - st.last_raw[1])
-    st.last_real = (rx, ry)
-    _real_ctrl.mouse_move(rx, ry)
+        del _em2.control2.on_gaze
+    except AttributeError:
+        pass
+    if was:
+        if ctx is not None:
+            with ctx.enter():
+                tracking_system.register("gaze", _orig_on_gaze)
+        else:
+            tracking_system.register("gaze", _orig_on_gaze)
 
 
+# --- head pose -> offset -----------------------------------------------------------
 def _on_gaze(frame):
     # tracker thread, ~90 Hz: keep it cheap
     head = head_from_frame(frame)
@@ -286,7 +317,6 @@ def _on_gaze(frame):
     if st.a_rise is None or (c["lost_s"] > 0 and gap > c["lost_s"]):
         # first sight / came back: start a new neutral, but let it SETTLE over
         # the next ANCHOR_SETTLE_S rather than trusting the very first frame
-        # (which is often mid-sit-down or a half-detected face)
         st.a_rise, st.a_yaw = st.s_rise, st.s_yaw
         st.settle_until = ts + ANCHOR_SETTLE_S
     elif ts < st.settle_until:
@@ -295,9 +325,9 @@ def _on_gaze(frame):
         st.a_yaw += b * (st.s_yaw - st.a_yaw)
     else:
         # near neutral: follow fast (posture drift); far: follow slowly (held tilt)
-        tau = c["fast_s"] if abs(st.s_rise - st.a_rise) < c["zone_mm"] else c["recenter_s"]
-        if tau > 0:
-            b = min(dt / tau, 1.0)
+        tau_a = c["fast_s"] if abs(st.s_rise - st.a_rise) < c["zone_mm"] else c["recenter_s"]
+        if tau_a > 0:
+            b = min(dt / tau_a, 1.0)
             st.a_rise += b * (st.s_rise - st.a_rise)
             st.a_yaw += b * (st.s_yaw - st.a_yaw)
 
@@ -310,22 +340,6 @@ def _on_gaze(frame):
         dx_mm = max(-m, min(m, dx_mm))
         dy_mm = max(-m, min(m, dy_mm))
     st.offset_px = (dx_mm * _geo.ppm_x, dy_mm * _geo.ppm_y)
-    _reapply()
-
-
-# --- public helpers (used by tracking_diag / zoom_pop) --------------------------
-def transform_px(x, y, offset=None):
-    """Apply gaze gain correction + head offset (or a frozen `offset`) to a screen-pixel point."""
-    return _transform(x, y, offset)
-
-
-def offset_px():
-    return _st.offset_px
-
-
-def last_raw_target():
-    """Last uncorrected target Talon's control mouse asked for, or None."""
-    return _st.last_raw
 
 
 # --- neutral-pose persistence (survives reloads and Talon restarts) -------------
@@ -364,6 +378,21 @@ def _load_anchor():
         return False
 
 
+# --- public helpers (used by tracking_diag / zoom_pop / gaze_measure) ------------
+def transform_px(x, y, offset=None):
+    """Apply gaze correction + head offset (or a frozen `offset`) to a screen-pixel point."""
+    return _transform(x, y, offset)
+
+
+def offset_px():
+    return _st.offset_px
+
+
+def last_raw_target():
+    """No longer available (nothing intercepts cursor moves any more)."""
+    return None
+
+
 def status_snapshot():
     st = _st
     d = {"on": st.enabled, "offset_px": (round(st.offset_px[0]), round(st.offset_px[1]))}
@@ -377,7 +406,6 @@ def _set_enabled(state):
     _st.enabled = state
     if not state:
         _st.offset_px = (0.0, 0.0)
-        _reapply()
 
 
 @mod.action_class
@@ -401,7 +429,6 @@ class Actions:
         st.a_rise, st.a_yaw = st.s_rise, st.s_yaw
         st.settle_until = 0.0
         st.offset_px = (0.0, 0.0)
-        _reapply()
         _save_anchor(force=True)
         app.notify("Head offset", f"Re-centred (rise {st.s_rise:.0f} mm, yaw {st.s_yaw:+.1f} deg)")
         print(f"[head_offset] re-centred at rise={st.s_rise:.1f}mm yaw={st.s_yaw:+.1f}deg dist={st.dist:.0f}mm")
@@ -412,10 +439,10 @@ class Actions:
         app.notify("Head offset", str(status_snapshot()))
 
     def head_offset_uninstall():
-        """Restore Talon's control mouse to the real ctrl module (removes the proxy)"""
-        _em2.ctrl = _real_ctrl
+        """Give the control mouse its original, uncorrected gaze stream back"""
+        _uninstall()
         _st.offset_px = (0.0, 0.0)
-        print("[head_offset] proxy uninstalled; eye_mouse_2 uses the real ctrl again")
+        print("[head_offset] uninstalled; control mouse receives raw gaze frames again")
 
 
 # --- install ---------------------------------------------------------------------
@@ -426,6 +453,7 @@ _restored = _load_anchor()   # keep the neutral pose across reloads/restarts
 cron.interval("250ms", _refresh_settings)
 tracking_system.register("gaze", _on_gaze)
 tracking_diag.set_offset_provider(status_snapshot)
-_em2.ctrl = _CtrlProxy(_real_ctrl)   # always wrap the real module (never an older proxy)
-print(f"[head_offset] installed: proxy on eye_mouse_2.ctrl, screen {_geo.rect} "
-      f"({_geo.ppm_x:.2f} px/mm), anchor {'restored rise=%.1f' % _st.a_rise if _restored else 'fresh'}, cfg={_cfg}")
+_hooked = _install()
+print(f"[head_offset] installed: gaze-frame hook on ControlMouse2 ({'live' if _hooked else 'armed for next ctrl-alt-e'}), "
+      f"screen {_geo.rect} ({_geo.ppm_x:.2f} px/mm), anchor {'restored rise=%.1f' % _st.a_rise if _restored else 'fresh'}, "
+      f"correction {'identity' if _identity[0] else 'active'}, cfg={_cfg}")

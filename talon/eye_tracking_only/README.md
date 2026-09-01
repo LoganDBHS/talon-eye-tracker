@@ -54,12 +54,19 @@ stream table, `ControlMouse2` state):
   around the neck → ~25–35 mm for a comfortable look-up. Pitch proxy.
 * **yaw** — heading of the left→right eye vector, degrees. Real rotation.
 
-Offset = gain × (pose − neutral) beyond a dead zone, low-passed, clamped, then
-added to every cursor move Talon's control mouse makes (a proxy replaces the
-`ctrl` name inside `eye_mouse_2`; `mouse_pos()` is un-offset for Talon so its
-"user touched the physical mouse" detection still works). If the head moves
-while the gaze target is steady, the layer moves the cursor itself; if anything
-else moved the cursor (hand mouse, zoom overlay) it backs off.
+Offset = gain × (pose − neutral) beyond a dead zone, low-passed, clamped. It is
+applied **upstream**: the gaze frames Talon's control mouse receives are
+replaced by corrected copies (gaze correction from ctrl-alt-m, then the head
+offset), so Talon does all its own smoothing/jump logic on corrected data and
+nothing intercepts its cursor moves. (The first version wrapped
+`ctrl.mouse_move` instead — that stuttered, because Talon glides toward its
+target by re-reading the cursor through a path the wrapper couldn't see.)
+The hook is registered in Talon's own tracking context and survives reloads of
+this folder; `user.head_offset_uninstall()` restores the raw stream.
+
+The neutral pose is saved in `%APPDATA%\Talon\head_offset_anchor.json` and
+follows your head at two speeds: fast within `head_recenter_zone_mm` (posture
+drift), slowly beyond it (a deliberate tilt holds for about a minute).
 
 The F4 zoom follows the same correction (the overlay opens where the offset
 cursor is; the offset is frozen while the overlay is open). Disable with

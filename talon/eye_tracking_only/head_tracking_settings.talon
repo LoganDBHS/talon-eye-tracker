@@ -9,9 +9,9 @@ settings():
     # ~25-35 mm; half the screen is 196 mm, so ~6 reaches the top edge from
     # centre. Cursor stops short of the top -> raise; overshoots/jittery -> lower.
     user.head_gain_y = 6.0
-    # mm of rise ignored around neutral. Breathing moves the cursor -> raise.
-    # First bit of a tilt does nothing -> lower.
-    user.head_deadzone_y_mm = 3.0
+    # mm of rise ignored around neutral. Nodding/breathing moves the cursor ->
+    # raise. First bit of a tilt does nothing -> lower.
+    user.head_deadzone_y_mm = 5.0
 
     # ---- horizontal (head yaw in degrees; 0 = disabled) ----
     # cursor mm per degree of yaw. 8-12 is a sensible start if you enable it.
