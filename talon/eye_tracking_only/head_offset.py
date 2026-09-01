@@ -81,9 +81,17 @@ _SETTINGS = {
                   "The neutral ('resting, facing the centre') pose is the running average of the head pose taken "
                   "ONLY while the gaze is in the central part of the screen; this is its time constant (s). "
                   "Lower = follows posture faster; 0 = frozen (ctrl-alt-r only)."),
-    "neutral_zone": ("head_neutral_zone", 0.2,
-                     "How far from the screen centre (fraction of the screen, 0.2 = middle 40%) the gaze may be "
+    "neutral_zone": ("head_neutral_zone", 0.3,
+                     "How far from the screen centre (fraction of the screen, 0.3 = middle 60%) the gaze may be "
                      "for the head to count as resting. Tilts happen when looking near the edges, never here."),
+    "lift_only": ("head_lift_only", 1.0,
+                  "1 = only LIFTING the head above the resting height moves the cursor (up); dropping the head "
+                  "(reading low on the screen) does nothing and simply lowers the resting height. 0 = symmetric."),
+    "down_s": ("head_neutral_down_seconds", 2.0,
+               "How fast the resting height follows the head DOWN (s). A relaxed/lowered head is the resting head."),
+    "up_s": ("head_neutral_up_seconds", 60.0,
+             "How fast the resting height creeps UP when the head stays high while looking away from the centre "
+             "(sitting up straighter). Slow, so a held tilt is not eaten. 0 = never."),
     "lost_s": ("head_lost_recenter_seconds", 5.0,
                "If the eyes were not seen for this many seconds (you got up), the next pose becomes the new "
                "neutral. 0 = never."),
@@ -367,15 +375,25 @@ def _on_gaze(frame):
         # to look at the middle, so this tracks posture but never a tilt
         g = frame.gaze
         z = c["neutral_zone"]
-        if (c["neutral_s"] > 0 and g is not None and (frame.left.detected or frame.right.detected)
-                and abs(g.x - 0.5) < z and abs(g.y - 0.5) < z):
-            b = min(dt / c["neutral_s"], 1.0)
+        central = (g is not None and (frame.left.detected or frame.right.detected)
+                   and abs(g.x - 0.5) < z and abs(g.y - 0.5) < z)
+        if c["lift_only"] and st.s_rise < st.a_rise:
+            tau_a = c["down_s"]          # head lowered: that IS the resting height, follow it down
+        elif central:
+            tau_a = c["neutral_s"]       # looking at the middle: head is at rest, learn it
+        else:
+            tau_a = c["up_s"]            # high and looking away from the middle: probably a tilt
+        if tau_a > 0:
+            b = min(dt / tau_a, 1.0)
             st.a_rise += b * (st.s_rise - st.a_rise)
             st.a_yaw += b * (st.s_yaw - st.a_yaw)
 
     if not st.enabled:
         return
-    dy_mm = -_deadzone(st.s_rise - st.a_rise, c["dead_y"]) * c["gain_y"]   # head up -> cursor up (-y)
+    lift = st.s_rise - st.a_rise
+    if c["lift_only"] and lift < 0:
+        lift = 0.0
+    dy_mm = -_deadzone(lift, c["dead_y"]) * c["gain_y"]   # head up -> cursor up (-y)
     dx_mm = _deadzone(st.s_yaw - st.a_yaw, c["dead_x"]) * c["gain_x"]      # turn right -> cursor right
     m = c["max_mm"]
     if m > 0:

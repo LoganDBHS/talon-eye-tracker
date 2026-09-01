@@ -64,11 +64,15 @@ target by re-reading the cursor through a path the wrapper couldn't see.)
 The hook is registered in Talon's own tracking context and survives reloads of
 this folder; `user.head_offset_uninstall()` restores the raw stream.
 
-The neutral pose ("resting head, facing the centre") is the running average of
-the head pose taken **only while the gaze is in the middle of the screen**
-(`head_neutral_zone`, `head_neutral_seconds`): you tilt to reach edges, never to
-look at the centre, so it tracks posture by itself and never adapts during a
-tilt. Saved in `%APPDATA%\Talon\head_offset_anchor.json`; ctrl-alt-r overrides.
+**Lift-only** (`head_lift_only = 1`): only raising the head above its resting
+height moves the cursor (up). Lowering it — which happens naturally when
+reading low on the screen — does nothing and simply becomes the new resting
+height (`head_neutral_down_seconds`). The resting height is also learned
+whenever the gaze is in the middle of the screen (`head_neutral_zone`,
+`head_neutral_seconds`) — you tilt to reach edges, never to look at the centre —
+and only creeps up slowly otherwise (`head_neutral_up_seconds`), so a held tilt
+is not eaten. Saved in `%APPDATA%\Talon\head_offset_anchor.json`; ctrl-alt-r
+overrides.
 
 The F4 zoom follows the same correction (the overlay opens where the offset
 cursor is; the offset is frozen while the overlay is open). Disable with

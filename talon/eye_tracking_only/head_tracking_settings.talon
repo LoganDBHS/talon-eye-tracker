@@ -35,8 +35,16 @@ settings():
     # overrides it immediately.
     # seconds: lower = follows posture faster (5 is a few glances at the middle)
     user.head_neutral_seconds = 5.0
-    # how far from centre still counts as "the middle" (0.2 = middle 40%)
-    user.head_neutral_zone = 0.2
+    # how far from centre still counts as "the middle" (0.3 = middle 60%)
+    user.head_neutral_zone = 0.3
+    # 1 = only LIFTING the head moves the cursor; lowering it (reading low on
+    # the screen) does nothing and just becomes the new resting height.
+    user.head_lift_only = 1
+    # resting height follows the head down this fast (s) ...
+    user.head_neutral_down_seconds = 2.0
+    # ... and creeps up this slowly when the head stays high while looking
+    # away from the middle (sitting up straighter). Slow so a tilt isn't eaten.
+    user.head_neutral_up_seconds = 60.0
 
     # ---- edge behaviour ----
     # magnet: corrected gaze within this many px of an edge snaps onto it.
