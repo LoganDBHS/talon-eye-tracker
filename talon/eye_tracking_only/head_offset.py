@@ -36,12 +36,15 @@ edit, save, done (re-read every 250 ms). Hotkeys in head_tracking.talon:
 
 Nothing here touches community or talon_plugins files.
 """
+import json
 import math
+import os
 import time
 
 from talon import Module, app, cron, ctrl as _real_ctrl, settings, tracking_system, ui
 from talon.plugins import eye_mouse_2 as _em2
 from talon.scripting import rctx
+from talon_init import TALON_HOME
 
 from . import tracking_diag
 from .tracking_diag import head_from_frame
@@ -67,9 +70,15 @@ _SETTINGS = {
                   "lower = snappier but shakier. 0 = raw."),
     "max_mm": ("head_max_offset_mm", 400.0,
                "Clamp on the head offset magnitude in cursor mm (per axis). 0 = no clamp."),
-    "recenter_s": ("head_recenter_seconds", 0.0,
-                   "If > 0, the neutral pose slowly drifts toward the current pose with this time constant "
-                   "(absorbs slow postural drift, but also slowly cancels a held tilt). 0 = never; use ctrl-alt-r."),
+    "recenter_s": ("head_recenter_seconds", 60.0,
+                   "Time constant (s) with which the neutral pose follows the head when the head is FAR from "
+                   "neutral (a deliberate tilt). Slow = a held tilt lasts; 0 = never. ctrl-alt-r re-centres at once."),
+    "fast_s": ("head_recenter_fast_seconds", 3.0,
+               "Time constant (s) when the head is NEAR neutral (within head_recenter_zone_mm): absorbs "
+               "posture drift, breathing, slouching. 0 = never."),
+    "zone_mm": ("head_recenter_zone_mm", 12.0,
+                "Head rise (mm) below which the fast re-centring applies. Tilts smaller than this fade out in a "
+                "few seconds; larger ones hold. Raise if small deliberate tilts keep fading."),
     "lost_s": ("head_lost_recenter_seconds", 5.0,
                "If the eyes were not seen for this many seconds (you got up), the next pose becomes the new "
                "neutral. 0 = never."),
@@ -107,6 +116,7 @@ def _refresh_settings():
     if st.last_seen and st.offset_px != (0.0, 0.0) and time.perf_counter() - st.last_seen > LOST_ZERO_S:
         st.offset_px = (0.0, 0.0)
         _reapply()
+    _save_anchor()
 
 
 # --- screen geometry ------------------------------------------------------------
@@ -283,10 +293,13 @@ def _on_gaze(frame):
         b = min(dt / 0.4, 1.0)
         st.a_rise += b * (st.s_rise - st.a_rise)
         st.a_yaw += b * (st.s_yaw - st.a_yaw)
-    elif c["recenter_s"] > 0:
-        b = min(dt / c["recenter_s"], 1.0)
-        st.a_rise += b * (st.s_rise - st.a_rise)
-        st.a_yaw += b * (st.s_yaw - st.a_yaw)
+    else:
+        # near neutral: follow fast (posture drift); far: follow slowly (held tilt)
+        tau = c["fast_s"] if abs(st.s_rise - st.a_rise) < c["zone_mm"] else c["recenter_s"]
+        if tau > 0:
+            b = min(dt / tau, 1.0)
+            st.a_rise += b * (st.s_rise - st.a_rise)
+            st.a_yaw += b * (st.s_yaw - st.a_yaw)
 
     if not st.enabled:
         return
@@ -313,6 +326,42 @@ def offset_px():
 def last_raw_target():
     """Last uncorrected target Talon's control mouse asked for, or None."""
     return _st.last_raw
+
+
+# --- neutral-pose persistence (survives reloads and Talon restarts) -------------
+_ANCHOR_FILE = os.path.join(TALON_HOME, "head_offset_anchor.json")
+_ANCHOR_MAX_AGE_S = 12 * 3600
+_saved = {"rise": None, "yaw": None, "ts": 0.0}
+
+
+def _save_anchor(force=False):
+    st = _st
+    if st.a_rise is None:
+        return
+    now = time.time()
+    if not force and (now - _saved["ts"] < 5.0 or
+                      (_saved["rise"] is not None and abs(st.a_rise - _saved["rise"]) < 0.5
+                       and abs(st.a_yaw - _saved["yaw"]) < 0.2)):
+        return
+    try:
+        with open(_ANCHOR_FILE, "w") as f:
+            json.dump({"rise": st.a_rise, "yaw": st.a_yaw, "ts": now}, f)
+        _saved.update(rise=st.a_rise, yaw=st.a_yaw, ts=now)
+    except OSError:
+        pass
+
+
+def _load_anchor():
+    try:
+        with open(_ANCHOR_FILE) as f:
+            d = json.load(f)
+        if time.time() - float(d.get("ts", 0)) > _ANCHOR_MAX_AGE_S:
+            return False
+        _st.a_rise, _st.a_yaw = float(d["rise"]), float(d["yaw"])
+        _saved.update(rise=_st.a_rise, yaw=_st.a_yaw, ts=float(d["ts"]))
+        return True
+    except Exception:
+        return False
 
 
 def status_snapshot():
@@ -350,8 +399,10 @@ class Actions:
             app.notify("Head offset", "No head data yet - are your eyes in view?")
             return
         st.a_rise, st.a_yaw = st.s_rise, st.s_yaw
+        st.settle_until = 0.0
         st.offset_px = (0.0, 0.0)
         _reapply()
+        _save_anchor(force=True)
         app.notify("Head offset", f"Re-centred (rise {st.s_rise:.0f} mm, yaw {st.s_yaw:+.1f} deg)")
         print(f"[head_offset] re-centred at rise={st.s_rise:.1f}mm yaw={st.s_yaw:+.1f}deg dist={st.dist:.0f}mm")
 
@@ -371,9 +422,10 @@ class Actions:
 _update_screen()
 ui.register("screen_change", _update_screen)
 _refresh_settings()
+_restored = _load_anchor()   # keep the neutral pose across reloads/restarts
 cron.interval("250ms", _refresh_settings)
 tracking_system.register("gaze", _on_gaze)
 tracking_diag.set_offset_provider(status_snapshot)
 _em2.ctrl = _CtrlProxy(_real_ctrl)   # always wrap the real module (never an older proxy)
 print(f"[head_offset] installed: proxy on eye_mouse_2.ctrl, screen {_geo.rect} "
-      f"({_geo.ppm_x:.2f} px/mm), cfg={_cfg}")
+      f"({_geo.ppm_x:.2f} px/mm), anchor {'restored rise=%.1f' % _st.a_rise if _restored else 'fresh'}, cfg={_cfg}")

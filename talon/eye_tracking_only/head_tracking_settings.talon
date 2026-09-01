@@ -24,9 +24,16 @@ settings():
     user.head_smoothing_ms = 80.0
     # clamp on the offset per axis (cursor mm). 0 = no clamp.
     user.head_max_offset_mm = 400.0
-    # neutral pose slowly follows the head with this time constant (seconds);
-    # 0 = never (use ctrl-alt-r to re-centre). Slowly cancels a held tilt.
-    user.head_recenter_seconds = 0.0
+    # ---- neutral pose ("what counts as not tilted") ----
+    # The neutral pose is saved to %APPDATA%\Talon\head_offset_anchor.json and
+    # survives reloads/restarts. It follows your head with two speeds:
+    #   within head_recenter_zone_mm of neutral -> fast (posture drift, slouching)
+    #   further away (a deliberate tilt)        -> slow (a held tilt keeps working)
+    # Small tilts (< zone) fade out in a few seconds; big ones hold ~a minute.
+    # ctrl-alt-r re-centres immediately. 0 = never follow.
+    user.head_recenter_seconds = 60.0
+    user.head_recenter_fast_seconds = 3.0
+    user.head_recenter_zone_mm = 12.0
     # eyes unseen for this long (you got up) -> next pose is the new neutral.
     user.head_lost_recenter_seconds = 5.0
 
