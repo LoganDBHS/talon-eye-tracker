@@ -1,6 +1,6 @@
 # Live-tunable settings for head_offset.py. Edit a number, save: Talon reloads
 # the file and head_offset.py picks the value up within 250 ms - no restart.
-# Full explanations in README.md. Defaults are the values shown here.
+# Full explanations in README.md.
 os: windows
 -
 settings():
@@ -30,10 +30,19 @@ settings():
     # eyes unseen for this long (you got up) -> next pose is the new neutral.
     user.head_lost_recenter_seconds = 5.0
 
-    # ---- gaze gain correction (Task 4 fallback; 1.0 / 0.0 = untouched) ----
-    # corrected = centre + (gain + curve*|u|) * (gaze - centre), u = -1..1
-    # Measure with ctrl-alt-m before changing these.
-    user.gaze_gain_x = 1.0
-    user.gaze_gain_y = 1.0
-    user.gaze_curve_x = 0.0
-    user.gaze_curve_y = 0.0
+    # ---- gaze correction, per side of centre (from ctrl-alt-m) ----
+    # corrected = centre + (gain + curve*u) * (gaze - centre), u = 0..1 toward
+    # that edge. 1.0 / 0.0 = untouched. Values below are from the run of
+    # 2026-09-01 10:04 (after the 10:03 calibration, ~60 cm): right edge landed
+    # 140 px short, bottom 50 px short, up over-reached mid-way, map rotated
+    # +2.7 deg clockwise. Re-run ctrl-alt-m after any recalibration and paste
+    # its SUGGEST lines here (the "residual" line tells you how well they work).
+    user.gaze_gain_left = 0.95
+    user.gaze_curve_left = 0.0
+    user.gaze_gain_right = 0.81
+    user.gaze_curve_right = 0.38
+    user.gaze_gain_up = 0.76
+    user.gaze_curve_up = 0.29
+    user.gaze_gain_down = 1.08
+    user.gaze_curve_down = 0.0
+    user.gaze_map_rotation_deg = 2.7

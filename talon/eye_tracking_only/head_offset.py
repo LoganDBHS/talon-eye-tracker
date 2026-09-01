@@ -73,16 +73,18 @@ _SETTINGS = {
     "lost_s": ("head_lost_recenter_seconds", 5.0,
                "If the eyes were not seen for this many seconds (you got up), the next pose becomes the new "
                "neutral. 0 = never."),
-    "kx": ("gaze_gain_x", 1.0,
-           "Gaze horizontal gain about screen centre: corrected = centre + k*(gaze-centre). "
-           "1.0 = untouched. >1 stretches gaze toward the side edges. Measure with ctrl-alt-m."),
-    "ky": ("gaze_gain_y", 1.0,
-           "Gaze vertical gain about screen centre (see gaze_gain_x). >1 stretches toward top/bottom."),
-    "qx": ("gaze_curve_x", 0.0,
-           "Quadratic horizontal term: u -> u*(gain + curve*|u|), u = -1..1 eccentricity. "
-           "Use only if ctrl-alt-m reports the shortfall grows faster than linearly."),
-    "qy": ("gaze_curve_y", 0.0,
-           "Quadratic vertical term (see gaze_curve_x)."),
+    # gaze correction, per side of centre: u -> u*(gain + curve*|u|), u = 0..1 eccentricity
+    # toward that edge. 1.0/0.0 = untouched. ctrl-alt-m prints the values to use.
+    "k_left": ("gaze_gain_left", 1.0, "Gaze gain toward the LEFT edge (>1 stretches, <1 shrinks)."),
+    "k_right": ("gaze_gain_right", 1.0, "Gaze gain toward the RIGHT edge."),
+    "k_up": ("gaze_gain_up", 1.0, "Gaze gain toward the TOP edge."),
+    "k_down": ("gaze_gain_down", 1.0, "Gaze gain toward the BOTTOM edge."),
+    "q_left": ("gaze_curve_left", 0.0, "Quadratic term toward the LEFT edge (only if ctrl-alt-m says non-linear)."),
+    "q_right": ("gaze_curve_right", 0.0, "Quadratic term toward the RIGHT edge."),
+    "q_up": ("gaze_curve_up", 0.0, "Quadratic term toward the TOP edge."),
+    "q_down": ("gaze_curve_down", 0.0, "Quadratic term toward the BOTTOM edge."),
+    "rot": ("gaze_map_rotation_deg", 0.0,
+            "Rotation of the gaze map as MEASURED by ctrl-alt-m (deg, + = clockwise); it is undone here."),
 }
 for _key, (_name, _default, _desc) in _SETTINGS.items():
     mod.setting(_name, type=float, default=_default, desc=_desc)
@@ -163,10 +165,22 @@ def _transform(x, y, offset=None):
     """Raw control-mouse target -> gain-corrected, head-offset, screen-clamped target.
     `offset` overrides the live head offset (px) - the zoom mouse freezes it."""
     g, c = _geo, _cfg
-    u = (x - g.cx) / g.hx
-    v = (y - g.cy) / g.hy
-    u *= c["kx"] + c["qx"] * abs(u)
-    v *= c["ky"] + c["qy"] * abs(v)
+    dx, dy = x - g.cx, y - g.cy
+    rot = c["rot"]
+    if rot:
+        # undo the measured clockwise rotation of the gaze map (pixel space, y down)
+        th = math.radians(-rot)
+        cs, sn = math.cos(th), math.sin(th)
+        dx, dy = dx * cs - dy * sn, dx * sn + dy * cs
+    u, v = dx / g.hx, dy / g.hy
+    if u > 0:
+        u *= c["k_right"] + c["q_right"] * u
+    else:
+        u *= c["k_left"] - c["q_left"] * u
+    if v > 0:
+        v *= c["k_down"] + c["q_down"] * v
+    else:
+        v *= c["k_up"] - c["q_up"] * v
     ox, oy = _st.offset_px if offset is None else offset
     X = g.cx + u * g.hx + ox
     Y = g.cy + v * g.hy + oy

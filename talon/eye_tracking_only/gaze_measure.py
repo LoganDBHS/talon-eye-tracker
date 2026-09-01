@@ -251,19 +251,35 @@ def _compute_results():
         if "gain" in d:
             axis_fits[axis].append(d)
 
-    for axis in ("x", "y"):
-        fits = axis_fits[axis]
-        if not fits:
-            continue
-        gain = sum(f["gain"] for f in fits) / len(fits)
-        curve = sum(f["curve"] for f in fits) / len(fits)
-        model = "quadratic" if any(f["model"] == "quadratic" for f in fits) else "linear"
-        out["suggest"][axis] = {"gain": round(gain, 3), "curve": round(curve, 3), "model": model}
-        note = ""
-        if len(fits) == 2 and abs(fits[0]["gain"] - fits[1]["gain"]) > 0.15 * max(abs(gain), 1e-6):
-            note = "  (sides differ >15%: calibration asymmetry, not gain)"
-        lines.append(f"SUGGEST {axis}: user.gaze_gain_{axis} = {gain:.2f}" +
-                     (f"   user.gaze_curve_{axis} = {curve:.2f}" if model == "quadratic" else "   (curve stays 0)") + note)
+    # per-side settings (head_offset.py applies gain/curve per side of centre)
+    sugg = []
+    for direction, d in out["directions"].items():
+        if "gain" in d:
+            sugg.append(f"user.gaze_gain_{direction} = {d['gain']:.2f}   user.gaze_curve_{direction} = {d['curve']:.2f}")
+            out["suggest"][direction] = {"gain": d["gain"], "curve": d["curve"]}
+    if rot is not None:
+        sugg.append(f"user.gaze_map_rotation_deg = {rot:.1f}")
+        out["suggest"]["rotation"] = round(rot, 2)
+    for s in sugg:
+        lines.append("SUGGEST " + s)
+
+    # how good is the correction that is CURRENTLY in head_tracking_settings.talon?
+    resid = []
+    for e in good:
+        gx, gy = e["measured_ecc"]
+        px = r.x + hx + gx * hx
+        py = r.y + hy + gy * hy
+        cx_, cy_ = head_offset.transform_px(px, py, (0.0, 0.0))
+        ex_, ey_ = (cx_ - (r.x + hx)) / hx, (cy_ - (r.y + hy)) / hy
+        err = math.hypot((ex_ - e["target_ecc"][0]) * hx, (ey_ - e["target_ecc"][1]) * hy)
+        raw = math.hypot((gx - e["target_ecc"][0]) * hx, (gy - e["target_ecc"][1]) * hy)
+        e["corrected_err_px"], e["raw_err_px"] = round(err), round(raw)
+        resid.append((err, raw, e["label"]))
+    if resid:
+        worst = max(resid)
+        lines.append(f"residual with the CURRENT settings: mean {sum(x[0] for x in resid) / len(resid):.0f} px "
+                     f"(raw {sum(x[1] for x in resid) / len(resid):.0f} px); worst {worst[0]:.0f} px at {worst[2]}")
+        out["residual_px"] = {"mean": round(sum(x[0] for x in resid) / len(resid)), "worst": round(worst[0]), "worst_at": worst[2]}
 
     if recalibrate:
         lines.append(f"VERDICT: {' + '.join(recalibrate)} error dominates -> RECALIBRATE (ctrl-alt-c, head still, at the "

@@ -80,7 +80,8 @@ Edit `head_tracking_settings.talon`, save; values apply within 250 ms.
 | Want head-turn to reach the side edges | `user.head_gain_x = 8` (0 = off); `user.head_deadzone_x_deg` ≥ 1 |
 | Cursor lags the head | lower `user.head_smoothing_ms` (80 → 40) |
 | Offset ever goes wild | `user.head_max_offset_mm` clamps it (400); ctrl-alt-h turns the layer off |
-| Gaze itself stops short of edges (head still) | run ctrl-alt-m, then set `user.gaze_gain_y/x` (and `gaze_curve_*` only if it says the error is non-linear) |
+| Gaze itself stops short of / overshoots an edge (head still) | run ctrl-alt-m and paste its `SUGGEST` lines: per-side `user.gaze_gain_left/right/up/down`, `user.gaze_curve_*` (only where it says non-linear) and `user.gaze_map_rotation_deg`. Its `residual` line shows the error left with the current values |
+| Everything is off in the same direction / eyes disagree a lot | that's calibration, not gain: ctrl-alt-c at the distance you sit; ctrl-alt-m says which eye is worse (tray → Eye Tracking → Only Left/Right Eye) |
 
 Default gains: half the screen height is 196 mm; 6 mm/mm × ~30 mm of rise
 ≈ 180 mm, i.e. a natural look-up lands near the top edge.
