@@ -48,6 +48,11 @@ settings():
     # away from the middle (sitting up straighter). Slow so a tilt isn't eaten.
     user.head_neutral_up_seconds = 60.0
 
+    # ---- precision ----
+    # extra low-pass on the corrected gaze before Talon sees it (ms).
+    # Steadier for small targets -> raise (150); laggy -> lower; 0 = off.
+    user.gaze_smoothing_ms = 90.0
+
     # ---- edge behaviour ----
     # magnet: corrected gaze within this many px of an edge snaps onto it.
     user.gaze_edge_snap_px = 30.0

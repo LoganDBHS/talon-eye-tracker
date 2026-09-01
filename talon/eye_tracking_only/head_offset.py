@@ -107,6 +107,9 @@ _SETTINGS = {
     "q_down": ("gaze_curve_down", 0.0, "Quadratic term toward the BOTTOM edge."),
     "rot": ("gaze_map_rotation_deg", 0.0,
             "Rotation of the gaze map as MEASURED by ctrl-alt-m (deg, + = clockwise); it is undone here."),
+    "gsmooth_ms": ("gaze_smoothing_ms", 90.0,
+                   "Extra low-pass (time constant, ms) on the corrected gaze before Talon sees it. "
+                   "Higher = steadier cursor for small targets but laggier; 0 = off. Try 60-150."),
     "snap_px": ("gaze_edge_snap_px", 30.0,
                 "Edge magnet: a corrected gaze point within this many px of a screen edge is snapped onto the "
                 "edge (menu bars, scrollbars, corners). 0 = off."),
@@ -134,7 +137,7 @@ def _refresh_settings():
     c = _cfg
     _identity[0] = (c["k_left"] == 1.0 and c["k_right"] == 1.0 and c["k_up"] == 1.0 and c["k_down"] == 1.0
                     and c["q_left"] == 0.0 and c["q_right"] == 0.0 and c["q_up"] == 0.0 and c["q_down"] == 0.0
-                    and c["rot"] == 0.0 and c["snap_px"] == 0.0)
+                    and c["rot"] == 0.0 and c["snap_px"] == 0.0 and c["gsmooth_ms"] == 0.0)
     # also runs every 250 ms: drop a stale offset once the eyes have been gone
     st = _st
     if st.last_seen and st.offset_px != (0.0, 0.0) and time.perf_counter() - st.last_seen > LOST_ZERO_S:
@@ -264,13 +267,33 @@ def _corrected_frame(frame):
     else:
         frame_gaze, eyes = frame.gaze, (l, r)
     if frame_gaze is not None:
-        f.gaze = _correct_norm(frame_gaze)
+        f.gaze = _smooth("gaze", _correct_norm(frame_gaze), frame.ts)
     for name, eye in zip(("left", "right"), eyes):
         if eye.detected and eye.gaze is not None:
             e = eye if eye is not getattr(frame, name) else copy.copy(eye)
-            e.gaze = _correct_norm(eye.gaze)
+            e.gaze = _smooth(name, _correct_norm(eye.gaze), frame.ts)
             setattr(f, name, e)
     return f
+
+
+# extra steadiness low-pass on the corrected gaze (user.gaze_smoothing_ms);
+# one EMA per point, each with its own timestamp
+_sm = {"gaze": None, "left": None, "right": None}
+
+
+def _smooth(key, p, ts):
+    tau = _cfg["gsmooth_ms"] / 1000.0
+    if tau <= 0:
+        return p
+    prev = _sm[key]
+    if prev is not None:
+        prev_ts, prev_p = prev
+        gap = ts - prev_ts
+        if 0 < gap <= 0.3:
+            a = gap / (tau + gap)
+            p = Point2d(prev_p.x + a * (p.x - prev_p.x), prev_p.y + a * (p.y - prev_p.y))
+    _sm[key] = (ts, p)
+    return p
 
 
 # --- hook into the control mouse's gaze subscription ------------------------------
