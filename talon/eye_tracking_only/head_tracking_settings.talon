@@ -15,9 +15,11 @@ settings():
     # raise. First bit of a tilt does nothing -> lower.
     user.head_deadzone_y_mm = 3.0
 
-    # ---- horizontal (head yaw in degrees; 0 = disabled) ----
-    # cursor mm per degree of yaw. 8-12 is a sensible start if you enable it.
-    user.head_gain_x = 0.0
+    # ---- horizontal (head yaw in degrees) ----
+    # cursor mm per degree of turning. Raise if a comfortable turn doesn't
+    # reach the side edge; lower if twitchy. If the cursor moves the WRONG way
+    # when you turn, make this negative. 0 disables.
+    user.head_gain_x = 10.0
     # degrees of yaw ignored around neutral (yaw noise is ~1 degree).
     user.head_deadzone_x_deg = 1.5
 

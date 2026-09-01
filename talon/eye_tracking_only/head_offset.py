@@ -375,8 +375,10 @@ def _on_gaze(frame):
         # to look at the middle, so this tracks posture but never a tilt
         g = frame.gaze
         z = c["neutral_zone"]
-        central = (g is not None and (frame.left.detected or frame.right.detected)
-                   and abs(g.x - 0.5) < z and abs(g.y - 0.5) < z)
+        seen = g is not None and (frame.left.detected or frame.right.detected)
+        central_x = seen and abs(g.x - 0.5) < z
+        central = central_x and abs(g.y - 0.5) < z
+        # vertical resting height (lift-only logic)
         if c["lift_only"] and st.s_rise < st.a_rise:
             tau_a = c["down_s"]          # head lowered: that IS the resting height, follow it down
         elif central:
@@ -384,9 +386,12 @@ def _on_gaze(frame):
         else:
             tau_a = c["up_s"]            # high and looking away from the middle: probably a tilt
         if tau_a > 0:
-            b = min(dt / tau_a, 1.0)
-            st.a_rise += b * (st.s_rise - st.a_rise)
-            st.a_yaw += b * (st.s_yaw - st.a_yaw)
+            st.a_rise += min(dt / tau_a, 1.0) * (st.s_rise - st.a_rise)
+        # yaw resting direction: symmetric (turning either way is intentional),
+        # learned while the gaze is horizontally central, creeps slowly otherwise
+        tau_y = c["neutral_s"] if central_x else c["up_s"]
+        if tau_y > 0:
+            st.a_yaw += min(dt / tau_y, 1.0) * (st.s_yaw - st.a_yaw)
 
     if not st.enabled:
         return
