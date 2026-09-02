@@ -19,7 +19,7 @@ Also required: [talonhub/community](https://github.com/talonhub/community) clone
 |---|---|
 | `Ctrl+Alt+E` | toggle control mouse (cursor follows gaze + head) |
 | `Ctrl+Alt+Z` | toggle zoom mouse |
-| `Ctrl+Alt+C` | run Talon's calibration |
+| `Ctrl+Alt+C` | run Talon's calibration; press again mid-run to cancel it. A banner reports how the run ended (saved / cancelled / failed and why) |
 | `F4` | open zoom overlay at gaze point |
 | `Shift+F4` / `Esc` | cancel zoom |
 | left / right click (while zoomed) | commit left / right click at the gazed target |
@@ -36,6 +36,7 @@ Clicks are synthesized with a raw `SendInput` batch (absolute move + down + up i
 ## Gotchas learned the hard way
 
 - Talon uses its **own** calibration (`Ctrl+Alt+C`), not Tobii's. A failed run can wedge the tracker (`EyeCmdErr 0x20000502` in `talon.log`); unplug/replug the USB and recalibrate.
+- Talon's calibration is silent about how it ended and cancels itself whenever its window loses focus. `calibration_guard.py` wraps it: progress text on the dots screen, `Ctrl+Alt+C` cancels, focus loss is ignored (`user.calibration_cancel_on_focus_loss = 1` restores Talon's behaviour), and the outcome (saved / cancelled / failed with the tracker error and point number) is shown in a banner, a notification and `talon.log` (`[calibguard]`).
 - The three Tobii services must be **stopped/disabled** while Talon owns the tracker; Windows Update may re-enable them — first thing to check if tracking breaks.
 - Talon runs elevated: killing it needs an elevated shell, and a plain `Stop-Process` fails *silently*.
 - Never edit `community` files — override settings from your own folder with a more specific context (see `eye_tracking_settings.talon`).
@@ -63,6 +64,7 @@ head data on demand and `gaze_measure.py` measures the implied gaze gain.
 | `Ctrl+Alt+R` | re-centre (current pose = neutral) |
 | `Ctrl+Alt+D` | tracking diagnostic logger on/off |
 | `Ctrl+Alt+M` | gaze gain measurement overlay (Esc cancels) |
+| `Ctrl+Alt+Y` / `Ctrl+Alt+N` | on the measurement results page: apply its SUGGEST values to `head_tracking_settings.talon` (previous file kept as `%APPDATA%\Talon\head_tracking_settings.backup`) / discard. Same as the Apply / Discard buttons; nothing changes unless you apply |
 
 Full details, tuning table and gotchas: `talon/eye_tracking_only/README.md`.
 Findings: the public Talon build is still 0.4.0 (Jul 2023) and already has the

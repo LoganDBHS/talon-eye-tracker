@@ -16,17 +16,25 @@ way to each edge - and records where the RAW GAZE actually lands for each one
 
 KEEP YOUR HEAD STILL during the run (eyes only). Esc cancels. Results go to
 talon.log (prefix [gazemeasure]), %APPDATA%/Talon/gaze_measure_last.json, and
-stay on screen until Esc. The control-mouse cursor target is recorded too, for
+stay on screen with two buttons: APPLY writes the SUGGEST values into
+head_tracking_settings.talon (Talon hot-reloads it; the previous file is saved
+to %APPDATA%/Talon/head_tracking_settings.backup) and DISCARD just closes.
+Click a button, or use ctrl-alt-y (apply) / ctrl-alt-n (discard); nothing is
+changed unless you apply. The control-mouse cursor target is recorded too, for
 information only; it lags/freezes when Talon pauses the control mouse.
 """
+import datetime
 import json
 import math
 import os
+import re
+import shutil
 import statistics
 import time
 
 from talon import Module, app, canvas, cron, tracking_system, ui
 from talon.scripting import rctx
+from talon.types import Rect
 from talon_init import TALON_HOME
 
 from . import head_offset
@@ -35,6 +43,9 @@ mod = Module()
 _ctx = rctx.active()
 
 _OUT = os.path.join(TALON_HOME, "gaze_measure_last.json")
+_SETTINGS = os.path.join(os.path.dirname(__file__), "head_tracking_settings.talon")
+_BACKUP = os.path.join(TALON_HOME, "head_tracking_settings.backup")
+RESULTS_TIMEOUT_S = 180   # results page auto-closes (discards) after this
 DWELL_S = 0.6        # gaze must stay near the dot this long before sampling starts
 DWELL_RADIUS = 0.18  # "near" = within this fraction of the half-screen (~230 px)
 SETTLE_MAX_S = 5.0   # give up waiting after this and sample anyway (flagged)
@@ -43,6 +54,7 @@ LINEAR_TOL = 0.08    # |k95/k50 - 1| below this -> linear gain is enough
 BIAS_WARN = 0.06     # global bias above this (fraction of half-screen) -> recalibrate
 ROT_WARN = 2.0       # degrees of map rotation -> recalibrate
 EYE_WARN_PX = 60     # inter-eye disagreement above this -> suggest single-eye mode
+HEAD_MOVE_WARN_MM = 4.0   # head rise above resting during a target beyond this -> warn (eyes-only run wanted)
 
 # (label, ecc_x, ecc_y): eccentricity as a fraction of the half-screen, -1..1
 _TARGETS = [
@@ -64,9 +76,15 @@ class _Run:
     unsettled = False
     latest = None        # latest GazeFrame
     samples = []         # (gaze_ecc, left_ecc|None, right_ecc|None, cursor_ecc|None)
+    lifts = []           # head rise above resting (mm) per sample, from head_offset
     per_target = []
     report_lines = []
     rect = None
+    suggest = {}         # direction -> {gain, curve}; "rotation" -> deg (from the last run)
+    verdict = None       # "gain" | "recalibrate"
+    buttons = {}         # name -> Rect, laid out by _draw on the results page
+    status = None        # list of lines shown after apply (or an apply error)
+    applied = False
 
 
 _run = _Run()
@@ -118,19 +136,22 @@ def _tick():
         timed_out = now - run.phase_t0 >= SETTLE_MAX_S
         if dwelt or timed_out:
             run.unsettled = not dwelt
-            run.phase, run.phase_t0, run.samples = "sample", now, []
+            run.phase, run.phase_t0, run.samples, run.lifts = "sample", now, [], []
     elif run.phase == "sample":
         s = _sample_now()
         if s is not None:
             run.samples.append(s)
+            lift = head_offset.status_snapshot().get("d_rise_mm")
+            if lift is not None:
+                run.lifts.append(lift)
         if now - run.phase_t0 >= SAMPLE_S:
             _finish_target()
             run.idx += 1
             if run.idx >= len(_TARGETS):
+                run.phase = "results"      # before computing: _draw would index _TARGETS[9]
                 _compute_results()
-                run.phase = "results"
                 run.job = None
-                cron.after("40s", _auto_close)
+                cron.after(f"{RESULTS_TIMEOUT_S}s", _auto_close)
                 return False      # stop this cron interval
             run.phase, run.phase_t0, run.near_since = "settle", now, None
 
@@ -155,6 +176,8 @@ def _finish_target():
         if entry["cursor_ecc"] and prev and entry["cursor_ecc"] == prev:
             entry["cursor_stale"] = True   # control mouse paused; cursor didn't follow
         entry["measured_ecc"] = entry["gaze_ecc"]
+        if run.lifts:
+            entry["head_lift_mm"] = round(statistics.median(run.lifts), 1)
     run.per_target.append(entry)
     print(f"[gazemeasure] {label}: {entry}")
 
@@ -184,6 +207,15 @@ def _compute_results():
     skipped = [e["label"] for e in run.per_target if e.get("unsettled") or not e.get("measured_ecc")]
     if skipped:
         lines.append(f"ignored (gaze never settled on the dot): {', '.join(skipped)}")
+    # the fit is a function of the eyes' angle INSIDE the head (head_offset credits
+    # head tilt against it live), so the run itself must be eyes-only
+    moved = [(e["label"], e["head_lift_mm"]) for e in good
+             if e.get("head_lift_mm") is not None and abs(e["head_lift_mm"]) > HEAD_MOVE_WARN_MM]
+    if moved:
+        worst = max(moved, key=lambda m: abs(m[1]))
+        lines.append(f"HEAD MOVED during {', '.join(m[0] for m in moved)} (up to {worst[1]:+.0f} mm at {worst[0]}): "
+                     f"the fit assumes eyes-only - redo with the head still before applying")
+        out["head_moved"] = moved
 
     # --- calibration-type errors: global bias and rotation ---
     if good:
@@ -269,7 +301,7 @@ def _compute_results():
         gx, gy = e["measured_ecc"]
         px = r.x + hx + gx * hx
         py = r.y + hy + gy * hy
-        cx_, cy_ = head_offset.transform_px(px, py, (0.0, 0.0))
+        cx_, cy_ = head_offset.transform_px(px, py, (0.0, 0.0), (0.0, 0.0))
         ex_, ey_ = (cx_ - (r.x + hx)) / hx, (cy_ - (r.y + hy)) / hy
         err = math.hypot((ex_ - e["target_ecc"][0]) * hx, (ey_ - e["target_ecc"][1]) * hy)
         raw = math.hypot((gx - e["target_ecc"][0]) * hx, (gy - e["target_ecc"][1]) * hy)
@@ -290,6 +322,7 @@ def _compute_results():
         out["verdict"] = "gain"
 
     run.report_lines = lines
+    run.suggest, run.verdict, run.status, run.applied = out["suggest"], out["verdict"], None, False
     for ln in lines:
         print(f"[gazemeasure] {ln}")
     try:
@@ -334,31 +367,166 @@ def _draw(c):
         c.draw_text(msg, r.x + 40, r.y + r.height / 2 + 120)
     else:
         y = r.y + 80
-        c.draw_text("Gaze gain measurement - results (Esc to close)", r.x + 60, y)
+        c.draw_text("Gaze gain measurement - results", r.x + 60, y)
         paint.textsize = 24
         for ln in run.report_lines:
             y += 40
             c.draw_text(ln, r.x + 60, y)
-        y += 60
+        y += 50
         paint.color = "aaaaaa"
         c.draw_text(f"Also written to talon.log and {_OUT}", r.x + 60, y)
+        y += 70
+        _draw_buttons(c, r.x + 60, y)
+
+
+def _draw_buttons(c, x, y):
+    """Apply / Discard buttons (or Close after applying); records their rects for hit-testing."""
+    run = _run
+    paint = c.paint
+    run.buttons = {}
+    w, h, gap = 520, 90, 40
+    if run.applied:
+        specs = [("close", "Close", "555555")]
+    elif run.suggest:
+        if run.verdict == "recalibrate":
+            specs = [("apply", "Apply anyway (verdict says recalibrate)", "9a6a00"),
+                     ("discard", "Discard", "555555")]
+        else:
+            specs = [("apply", "Apply to settings", "1f7a1f"), ("discard", "Discard", "555555")]
+    else:
+        specs = [("discard", "Close (nothing to apply)", "555555")]
+    x0 = x
+    for name, label, color in specs:
+        rect = Rect(x, y, w, h)
+        run.buttons[name] = rect
+        paint.style = paint.Style.FILL
+        paint.color = color
+        c.draw_rect(rect)
+        paint.style = paint.Style.STROKE
+        paint.stroke_width = 2
+        paint.color = "dddddd"
+        c.draw_rect(rect)
+        paint.style = paint.Style.FILL
+        paint.color = "ffffff"
+        paint.textsize = 26
+        c.draw_text(label, x + 24, y + h / 2 + 9)
+        x += w + gap
+    paint.textsize = 22
+    paint.color = "aaaaaa"
+    ty = y + h + 40
+    for ln in run.status or ():
+        c.draw_text(ln, x0, ty)
+        ty += 34
+    c.draw_text(f"Click a button, or ctrl-alt-y = apply, ctrl-alt-n = discard. "
+                f"Auto-discards after {RESULTS_TIMEOUT_S} s.", x0, ty)
+
+
+def _fmt(v, nd):
+    return f"{v:.{nd}f}"
+
+
+def apply_suggestions():
+    """Write the last run's SUGGEST values into head_tracking_settings.talon.
+
+    Only the `user.gaze_gain_*`, `user.gaze_curve_*` and `user.gaze_map_rotation_deg`
+    lines that have a suggestion are rewritten in place (everything else in the
+    file, comments included, is untouched). Directions with no usable data keep
+    their current values. The previous file is copied to _BACKUP first. Talon
+    hot-reloads the settings file, so head_offset.py picks the values up at once.
+    """
+    run = _run
+    if not run.suggest:
+        run.status = ["nothing to apply (no usable SUGGEST values in the last run)"]
+        return False
+    try:
+        with open(_SETTINGS, encoding="utf-8", newline="") as f:
+            text = f.read()
+    except OSError as ex:
+        run.status = [f"apply FAILED: cannot read {_SETTINGS}: {ex}"]
+        print(f"[gazemeasure] {run.status[0]}")
+        return False
+    nl = "\r\n" if "\r\n" in text else "\n"
+    wanted = {}
+    for direction, d in run.suggest.items():
+        if direction == "rotation":
+            wanted["gaze_map_rotation_deg"] = _fmt(d, 1)
+        else:
+            wanted[f"gaze_gain_{direction}"] = _fmt(d["gain"], 2)
+            wanted[f"gaze_curve_{direction}"] = _fmt(d["curve"], 2)
+    changed, missing = [], []
+    for key, val in wanted.items():
+        pat = re.compile(r"^([ \t]*user\." + re.escape(key) + r"[ \t]*=[ \t]*)(-?[0-9]*\.?[0-9]+)([ \t]*(?:#.*)?)$", re.M)
+        m = pat.search(text)
+        if not m:
+            missing.append(key)
+            continue
+        if abs(float(m.group(2)) - float(val)) > 1e-9:
+            changed.append(f"{key} {m.group(2)} -> {val}")
+        text = text[:m.start()] + m.group(1) + val + m.group(3) + text[m.end():]
+    if missing:
+        run.status = [f"apply FAILED: not found in settings file: {', '.join(missing)} (file unchanged)"]
+        print(f"[gazemeasure] {run.status[0]}")
+        return False
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    note = f"    # last applied from ctrl-alt-m: {stamp} (verdict: {run.verdict}; previous file in {_BACKUP})"
+    note_pat = re.compile(r"^[ \t]*# last applied from ctrl-alt-m:.*$", re.M)
+    if note_pat.search(text):
+        text = note_pat.sub(lambda _m: note, text, count=1)
+    else:
+        first = re.search(r"^[ \t]*user\.gaze_gain_", text, re.M)
+        if first:
+            text = text[:first.start()] + note + nl + text[first.start():]
+    try:
+        shutil.copyfile(_SETTINGS, _BACKUP)
+        with open(_SETTINGS, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+    except OSError as ex:
+        run.status = [f"apply FAILED: {ex}"]
+        print(f"[gazemeasure] {run.status[0]}")
+        return False
+    run.applied = True
+    # on-screen status: a few changes per line so it never runs off the screen
+    head = f"APPLIED {len(changed)} change(s) to head_tracking_settings.talon (previous file: {_BACKUP})"
+    run.status = [head] + ["; ".join(changed[i:i + 3]) for i in range(0, len(changed), 3)]
+    if not changed:
+        run.status.append("values were already current")
+    print(f"[gazemeasure] {head}: {'; '.join(changed) or 'no value differed'}")
+    app.notify("Gaze measure", f"settings applied ({len(changed)} changed)")
+    return True
+
+
+def _hit(name, pos):
+    rect = _run.buttons.get(name)
+    return rect is not None and pos is not None and \
+        rect.x <= pos.x <= rect.x + rect.width and rect.y <= pos.y <= rect.y + rect.height
 
 
 def _on_key(e):
-    # Esc during the run; ANY key on the results page. (The fullscreen canvas
-    # may not get keyboard focus at all - ctrl-alt-m is the reliable way out.)
+    # Esc cancels the run / discards the results; Enter or y applies. (The
+    # fullscreen canvas may not get keyboard focus at all - the ctrl-alt-y /
+    # ctrl-alt-n hotkeys in head_tracking.talon are the reliable way.)
     key = getattr(e, "key", None)
-    if key in ("esc", "escape") or _run.phase == "results":
+    if key in ("esc", "escape"):
         stop()
+    elif _run.phase == "results" and key in ("return", "enter", "y") and not _run.applied:
+        apply_suggestions()
 
 
 def _on_mouse(e):
-    if _run.phase == "results" and getattr(e, "down", False):
+    run = _run
+    if run.phase != "results" or getattr(e, "event", None) != "mousedown":
+        return
+    pos = getattr(e, "gpos", None) or getattr(e, "pos", None)
+    if _hit("apply", pos) and not run.applied:
+        apply_suggestions()
+    elif _hit("discard", pos) or _hit("close", pos):
         stop()
+    # clicks elsewhere on the results page do nothing
 
 
 def _auto_close():
     if _run.phase == "results":
+        print("[gazemeasure] closed" if _run.applied else "[gazemeasure] results page timed out - discarded")
         stop()
 
 
@@ -417,6 +585,23 @@ class Actions:
             stop()
         else:
             start()
+
+    def gaze_measure_apply():
+        """Write the SUGGEST values of the finished measurement into head_tracking_settings.talon"""
+        if _run.phase != "results":
+            app.notify("Gaze measure", "no results on screen - run ctrl-alt-m first")
+            return
+        if _run.applied:
+            app.notify("Gaze measure", "already applied")
+            return
+        apply_suggestions()
+
+    def gaze_measure_discard():
+        """Close the measurement results without changing any settings"""
+        if _run.phase != "idle":
+            if _run.phase == "results" and not _run.applied:
+                print("[gazemeasure] discarded")
+            stop()
 
     def gaze_measure_stop():
         """Close the gaze gain measurement overlay"""

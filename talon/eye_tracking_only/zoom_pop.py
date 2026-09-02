@@ -265,12 +265,12 @@ mod.setting(
     desc="1 = the F4 zoom opens where the head-offset/gain-corrected cursor is; 0 = stock behaviour (raw gaze)",
 )
 
-_frozen_offset = [(0.0, 0.0)]
+_frozen_offset = [((0.0, 0.0), (0.0, 0.0))]   # (extra push px, eye-in-head credit)
 
 
 def _freeze_head_offset():
     if _head_offset is not None:
-        _frozen_offset[0] = _head_offset.offset_px()
+        _frozen_offset[0] = _head_offset.head_state()
 
 
 class _ShiftedEye:
@@ -299,7 +299,7 @@ class _ShiftedFrame:
         g = eye.gaze
         px = rect.x + g.x * rect.width
         py = rect.y + g.y * rect.height
-        cx, cy = _head_offset.transform_px(px, py, offset)
+        cx, cy = _head_offset.transform_px(px, py, offset[0], offset[1])
         return _ShiftedEye(eye, Point2d((cx - rect.x) / rect.width, (cy - rect.y) / rect.height))
 
     def __iter__(self):

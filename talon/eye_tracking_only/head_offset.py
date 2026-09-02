@@ -24,7 +24,26 @@ HOW IT WORKS (rewritten 2026-09-01)
   made the cursor stutter because Talon glides toward its target by re-reading
   the cursor position through a path the wrapper couldn't see.)
 
-  Head offset = gain * (pose - neutral) beyond a dead zone, low-passed, clamped.
+  HEAD = "EYE-IN-HEAD CREDIT", NOT A PUSH (rewritten 2026-09-02)
+  The tracker's gaze point is already head-compensated: tilting the head while
+  keeping the eyes on a target does not move the point. What degrades is the
+  gaze estimate when the EYES roll far inside the head (eyelid over the pupil,
+  glints lost, one eye dropping out) - that is what the ctrl-alt-m gain/curve
+  corrects, and it was measured with the head still, so it is a function of
+  the eyes' angle inside the head, not of the screen position. So:
+      pitch = lift_mm / head_pivot_mm         (rad; lift = rise above resting)
+      credit_v = -pitch * dist / half_height_mm   (screen eccentricity the
+                                                    head tilt accounts for)
+      v_eye = v_gaze - credit_v * head_credit_y
+      corrected v = v_gaze + [v_eye*(k-1) + q*v_eye*|v_eye|]   (k, q per side)
+  and the same for yaw horizontally. Eyes-only up to the top edge: v_eye = v,
+  the full correction applies (as before). Head tilted, eyes near neutral:
+  v_eye ~ 0, no correction, the raw point is trusted. Both ways of looking at
+  a spot land on the same spot, and the head is not asked to do anything
+  unnatural. head_credit_* = 0 restores the old "correct by screen position".
+  The additive push (head_gain_y/x, cursor mm per mm/deg) still exists for
+  anyone who wants the head to be a mouse too; it defaults to 0 now.
+
   The neutral pose ("resting head facing the centre") is the running average of
   the head pose taken only while the RAW gaze is in the central zone of the
   screen - you tilt to reach edges, never to look at the middle - so it tracks
@@ -61,15 +80,25 @@ _ctx = rctx.active()
 
 # key -> (setting name, default, description). All floats.
 _SETTINGS = {
-    "gain_y": ("head_gain_y", 6.0,
-               "Vertical head gain: cursor mm per mm of head rise (eye-centre moving up the screen's axis). "
-               "Higher = a smaller head tilt reaches the top edge; too high = jitter/overshoot. 0 disables vertical."),
+    "pivot_mm": ("head_pivot_mm", 100.0,
+                 "Effective radius (mm) from the neck pivot to the eyes: head pitch = rise / pivot. Lower = a given "
+                 "rise counts as MORE tilt (more credit); 100 fits a nod from the top of the neck, 150-200 a lean "
+                 "from the shoulders."),
+    "credit_y": ("head_credit_y", 1.0,
+                 "How much of the head PITCH is subtracted from the gaze eccentricity BEFORE the up/down gain/curve "
+                 "correction (1 = the correction depends only on the eyes' angle inside the head, so a head tilt + "
+                 "small eye move and an eyes-only look land on the same spot; 0 = old behaviour, correct by screen "
+                 "position). Values in between blend."),
+    "credit_x": ("head_credit_x", 1.0,
+                 "Same for head YAW and the left/right correction."),
+    "gain_y": ("head_gain_y", 0.0,
+               "EXTRA PUSH: cursor mm per mm of head rise ADDED to the corrected gaze (the head acts as a mouse). "
+               "0 = off (the head only re-weights the gaze correction, see head_credit_y). Was 6-8 before 2026-09-02."),
     "dead_y": ("head_deadzone_y_mm", 5.0,
                "Head rise (mm) ignored around the neutral pose. Raise if nodding/posture moves the cursor; "
                "lower if the first part of a tilt does nothing."),
     "gain_x": ("head_gain_x", 0.0,
-               "Horizontal head gain: cursor mm per degree of head yaw (turning left/right). 0 = off. "
-               "Try 8-12; higher = less turn needed to reach a side edge."),
+               "EXTRA PUSH: cursor mm per degree of head yaw ADDED to the corrected gaze. 0 = off."),
     "dead_x": ("head_deadzone_x_deg", 1.5,
                "Head yaw (degrees) ignored around neutral. Yaw noise is ~1 deg, so keep >= 1."),
     "smooth_ms": ("head_smoothing_ms", 80.0,
@@ -140,8 +169,10 @@ def _refresh_settings():
                     and c["rot"] == 0.0 and c["snap_px"] == 0.0 and c["gsmooth_ms"] == 0.0)
     # also runs every 250 ms: drop a stale offset once the eyes have been gone
     st = _st
-    if st.last_seen and st.offset_px != (0.0, 0.0) and time.perf_counter() - st.last_seen > LOST_ZERO_S:
+    if st.last_seen and (st.offset_px != (0.0, 0.0) or st.credit != (0.0, 0.0)) \
+            and time.perf_counter() - st.last_seen > LOST_ZERO_S:
         st.offset_px = (0.0, 0.0)
+        st.credit = (0.0, 0.0)
     _save_anchor()
 
 
@@ -151,6 +182,7 @@ class _Geo:
     cx = cy = 0.0
     hx = hy = 1.0
     ppm_x = ppm_y = 1.0   # pixels per mm
+    hx_mm = hy_mm = 1.0   # half screen size in mm
 
 
 _geo = _Geo()
@@ -166,6 +198,8 @@ def _update_screen(*_args):
     _geo.hy = max(r.height / 2, 1)
     _geo.ppm_x = r.width / (s.mm_x or 699.0)
     _geo.ppm_y = r.height / (s.mm_y or 393.0)
+    _geo.hx_mm = _geo.hx / _geo.ppm_x
+    _geo.hy_mm = _geo.hy / _geo.ppm_y
 
 
 # --- state -------------------------------------------------------------------------
@@ -177,7 +211,9 @@ class _State:
     last_ts = 0.0
     last_seen = 0.0
     settle_until = 0.0         # anchor follows the head fast until this timestamp
-    offset_px = (0.0, 0.0)     # current head offset, pixels (tuple = atomic swap)
+    offset_px = (0.0, 0.0)     # extra push, pixels (tuple = atomic swap)
+    credit = (0.0, 0.0)        # screen eccentricity (-1..1 per axis) the head pose accounts for
+    pitch_deg = yaw_deg = 0.0  # inferred head rotation away from neutral (for status/diag)
     frames = 0
 
 
@@ -192,9 +228,18 @@ def _deadzone(d, dz):
     return d - math.copysign(dz, d)
 
 
-def _transform(x, y, offset=None):
-    """Raw gaze pixel -> rotation-corrected, per-side gain/curve, head-offset, screen-clamped pixel.
-    `offset` overrides the live head offset (px) - the zoom mouse freezes it."""
+def _correction(e, k_pos, q_pos, k_neg, q_neg):
+    """Error term for one axis: what the per-side gain/curve ADDS to eccentricity e."""
+    if e > 0:
+        return e * (k_pos - 1.0) + q_pos * e * e
+    return e * (k_neg - 1.0) - q_neg * e * e
+
+
+def _transform(x, y, offset=None, credit=None):
+    """Raw gaze pixel -> rotation-corrected, per-side gain/curve (evaluated at the EYE-IN-HEAD
+    eccentricity), plus extra push, screen-clamped pixel.
+    `offset` (px) / `credit` (eccentricity) override the live head state - the zoom mouse
+    freezes them, ctrl-alt-m evaluates with the head at rest ((0, 0), (0, 0))."""
     g, c = _geo, _cfg
     dx, dy = x - g.cx, y - g.cy
     rot = c["rot"]
@@ -204,14 +249,12 @@ def _transform(x, y, offset=None):
         cs, sn = math.cos(th), math.sin(th)
         dx, dy = dx * cs - dy * sn, dx * sn + dy * cs
     u, v = dx / g.hx, dy / g.hy
-    if u > 0:
-        u *= c["k_right"] + c["q_right"] * u
-    else:
-        u *= c["k_left"] - c["q_left"] * u
-    if v > 0:
-        v *= c["k_down"] + c["q_down"] * v
-    else:
-        v *= c["k_up"] - c["q_up"] * v
+    cu, cv = _st.credit if credit is None else credit
+    # the correction was measured with the head still, so it is a function of how far
+    # the eyes are turned INSIDE the head: subtract the part of the eccentricity the
+    # head pose already accounts for, evaluate there, add the result to the raw point
+    u += _correction(u - cu, c["k_right"], c["q_right"], c["k_left"], c["q_left"])
+    v += _correction(v - cv, c["k_down"], c["q_down"], c["k_up"], c["q_up"])
     ox, oy = _st.offset_px if offset is None else offset
     X = g.cx + u * g.hx + ox
     Y = g.cy + v * g.hy + oy
@@ -245,7 +288,7 @@ def _corrected_frame(frame):
     l, r = frame.left, frame.right
     one_eye = _cfg["mirror"] and (l.detected != r.detected)
     if _identity[0] and _st.offset_px == (0.0, 0.0) and not one_eye:
-        return frame
+        return frame   # (the credit only acts through the correction, which is identity here)
     f = copy.copy(frame)
     if one_eye:
         # the tracker drops one eye at the top corners; Talon would blend the
@@ -421,8 +464,21 @@ def _on_gaze(frame):
     lift = st.s_rise - st.a_rise
     if c["lift_only"] and lift < 0:
         lift = 0.0
-    dy_mm = -_deadzone(lift, c["dead_y"]) * c["gain_y"]   # head up -> cursor up (-y)
-    dx_mm = _deadzone(st.s_yaw - st.a_yaw, c["dead_x"]) * c["gain_x"]      # turn right -> cursor right
+    lift = _deadzone(lift, c["dead_y"])                       # mm above resting
+    turn = _deadzone(st.s_yaw - st.a_yaw, c["dead_x"])        # deg right of resting
+    # inferred head rotation -> the screen eccentricity it accounts for (a pitch of p
+    # at distance D covers D*tan(p) mm of screen). pitch up = toward the top = negative
+    # v; yaw right = positive u.
+    pivot = c["pivot_mm"] if c["pivot_mm"] > 0 else 100.0
+    pitch = max(-1.0, min(1.0, lift / pivot))
+    st.pitch_deg, st.yaw_deg = math.degrees(pitch), turn
+    d = dist if dist and dist > 100 else 600.0
+    cv = -c["credit_y"] * d * math.tan(pitch) / _geo.hy_mm
+    cu = c["credit_x"] * d * math.tan(math.radians(max(-60.0, min(60.0, turn)))) / _geo.hx_mm
+    st.credit = (max(-1.0, min(1.0, cu)), max(-1.0, min(1.0, cv)))
+    # optional extra push (head as a mouse)
+    dy_mm = -lift * c["gain_y"]   # head up -> cursor up (-y)
+    dx_mm = turn * c["gain_x"]    # turn right -> cursor right
     m = c["max_mm"]
     if m > 0:
         dx_mm = max(-m, min(m, dx_mm))
@@ -467,13 +523,19 @@ def _load_anchor():
 
 
 # --- public helpers (used by tracking_diag / zoom_pop / gaze_measure) ------------
-def transform_px(x, y, offset=None):
-    """Apply gaze correction + head offset (or a frozen `offset`) to a screen-pixel point."""
-    return _transform(x, y, offset)
+def transform_px(x, y, offset=None, credit=None):
+    """Apply gaze correction + head state (or a frozen `offset` px / `credit` eccentricity)
+    to a screen-pixel point. Pass (0, 0), (0, 0) to evaluate as if the head were at rest."""
+    return _transform(x, y, offset, credit)
 
 
 def offset_px():
     return _st.offset_px
+
+
+def head_state():
+    """(extra push px, eccentricity credit) - freeze both with one call (zoom mouse)."""
+    return _st.offset_px, _st.credit
 
 
 def last_raw_target():
@@ -487,6 +549,8 @@ def status_snapshot():
     if st.s_rise is not None and st.a_rise is not None:
         d["d_rise_mm"] = round(st.s_rise - st.a_rise, 1)
         d["d_yaw_deg"] = round(st.s_yaw - st.a_yaw, 1)
+        d["pitch_deg"] = round(st.pitch_deg, 1)
+        d["credit"] = (round(st.credit[0], 2), round(st.credit[1], 2))
     return d
 
 
@@ -494,6 +558,7 @@ def _set_enabled(state):
     _st.enabled = state
     if not state:
         _st.offset_px = (0.0, 0.0)
+        _st.credit = (0.0, 0.0)
 
 
 @mod.action_class
@@ -517,6 +582,7 @@ class Actions:
         st.a_rise, st.a_yaw = st.s_rise, st.s_yaw
         st.settle_until = 0.0
         st.offset_px = (0.0, 0.0)
+        st.credit = (0.0, 0.0)
         _save_anchor(force=True)
         app.notify("Head offset", f"Re-centred (rise {st.s_rise:.0f} mm, yaw {st.s_yaw:+.1f} deg)")
         print(f"[head_offset] re-centred at rise={st.s_rise:.1f}mm yaw={st.s_yaw:+.1f}deg dist={st.dist:.0f}mm")
@@ -530,6 +596,7 @@ class Actions:
         """Give the control mouse its original, uncorrected gaze stream back"""
         _uninstall()
         _st.offset_px = (0.0, 0.0)
+        _st.credit = (0.0, 0.0)
         print("[head_offset] uninstalled; control mouse receives raw gaze frames again")
 
 
@@ -543,5 +610,5 @@ tracking_system.register("gaze", _on_gaze)
 tracking_diag.set_offset_provider(status_snapshot)
 _hooked = _install()
 print(f"[head_offset] installed: gaze-frame hook on ControlMouse2 ({'live' if _hooked else 'armed for next ctrl-alt-e'}), "
-      f"screen {_geo.rect} ({_geo.ppm_x:.2f} px/mm), anchor {'restored rise=%.1f' % _st.a_rise if _restored else 'fresh'}, "
+      f"screen {_geo.rect} ({_geo.ppm_x:.2f} px/mm, half {_geo.hx_mm:.0f}x{_geo.hy_mm:.0f} mm), anchor {'restored rise=%.1f' % _st.a_rise if _restored else 'fresh'}, "
       f"correction {'identity' if _identity[0] else 'active'}, cfg={_cfg}")

@@ -54,18 +54,35 @@ stream table, `ControlMouse2` state):
   around the neck → ~25–35 mm for a comfortable look-up. Pitch proxy.
 * **yaw** — heading of the left→right eye vector, degrees. Real rotation.
 
-Offset = gain × (pose − neutral) beyond a dead zone, low-passed, clamped. It is
-applied **upstream**: the gaze frames Talon's control mouse receives are
-replaced by corrected copies (gaze correction from ctrl-alt-m, then the head
-offset), so Talon does all its own smoothing/jump logic on corrected data and
-nothing intercepts its cursor moves. (The first version wrapped
+**The head is a credit, not a push (since 2026-09-02).** The tracker's gaze
+point is already head-compensated: tilt your head with your eyes on a target
+and the point stays put. What actually goes wrong is the gaze estimate when
+the *eyes* roll far inside the head (eyelid over the pupil, glints lost, one
+eye dropping out at the top corners) — and that is what the ctrl-alt-m
+gain/curve corrects, measured with the head still, so it is a function of the
+eyes' angle inside the head. The layer therefore turns the head pose into a
+pitch (`rise / head_pivot_mm`) and yaw, converts them to the screen
+eccentricity they account for (`dist × tan(angle) / half-screen-mm`) and
+subtracts that from the gaze eccentricity *before* evaluating the correction:
+
+* eyes only, head still → full correction, exactly as before;
+* head tilted, eyes near neutral → no correction, the raw point is trusted.
+
+So looking at a spot either way lands the cursor on the same spot, and the
+head is never asked to do more than it naturally does. `head_credit_y/x`
+blends between this (1) and the old correct-by-screen-position (0). The old
+additive push still exists (`head_gain_y/x`, cursor mm per mm/deg) but is 0.
+Everything is applied **upstream**: the gaze frames Talon's control mouse
+receives are replaced by corrected copies, so Talon does all its own
+smoothing/jump logic on corrected data and nothing intercepts its cursor
+moves. (The first version wrapped
 `ctrl.mouse_move` instead — that stuttered, because Talon glides toward its
 target by re-reading the cursor through a path the wrapper couldn't see.)
 The hook is registered in Talon's own tracking context and survives reloads of
 this folder; `user.head_offset_uninstall()` restores the raw stream.
 
 **Lift-only** (`head_lift_only = 1`): only raising the head above its resting
-height moves the cursor (up). Lowering it — which happens naturally when
+height counts as a tilt. Lowering it — which happens naturally when
 reading low on the screen — does nothing and simply becomes the new resting
 height (`head_neutral_down_seconds`). The resting height is also learned
 whenever the gaze is in the middle of the screen (`head_neutral_zone`,
@@ -84,20 +101,24 @@ Edit `head_tracking_settings.talon`, save; values apply within 250 ms.
 
 | Symptom | Change |
 |---|---|
-| Head-up doesn't reach the top edge | raise `user.head_gain_y` (6 → 8 → 10) |
-| Cursor overshoots / feels twitchy on tilt | lower `user.head_gain_y`, or raise `user.head_smoothing_ms` (80 → 150) |
-| Breathing / small posture moves the cursor | raise `user.head_deadzone_y_mm` (3 → 5) |
-| First part of a tilt does nothing | lower `user.head_deadzone_y_mm` (3 → 1.5) |
+| Head-tilt + eyes on a spot lands SHORT of the eyes-only look | lower `user.head_pivot_mm` (100 → 80: a given rise counts as more tilt) |
+| Head-tilt look lands BEYOND the eyes-only look / cursor moves when I tilt with eyes fixed | raise `user.head_pivot_mm` (100 → 130-150) or blend `user.head_credit_y` (1 → 0.6) |
+| Want the head to push the cursor as well (head as a mouse) | `user.head_gain_y = 6-8` (cursor mm per mm of rise); `head_gain_x` likewise |
+| Cursor shakes when tilted | raise `user.head_smoothing_ms` (80 → 150) |
+| Breathing / small posture changes the correction | raise `user.head_deadzone_y_mm` (3 → 5) |
+| First part of a tilt is not credited | lower `user.head_deadzone_y_mm` (3 → 1.5) |
 | Cursor drifts over minutes (slouching) | glance at the middle of the screen for a few seconds (neutral re-learns there); lower `user.head_neutral_seconds` to make that faster; ctrl-alt-r forces it |
 | Cursor sits pushed after I sit back down | ctrl-alt-r (or wait: `user.head_lost_recenter_seconds` re-anchors after you were away ≥ 5 s) |
-| Want head-turn to reach the side edges | `user.head_gain_x = 8` (0 = off); `user.head_deadzone_x_deg` ≥ 1 |
 | Cursor lags the head | lower `user.head_smoothing_ms` (80 → 40) |
-| Offset ever goes wild | `user.head_max_offset_mm` clamps it (400); ctrl-alt-h turns the layer off |
+| Anything goes wild | ctrl-alt-h turns the head part off (correction stays); `user.head_max_offset_mm` clamps the push (400) |
 | Gaze itself stops short of / overshoots an edge (head still) | run ctrl-alt-m and paste its `SUGGEST` lines: per-side `user.gaze_gain_left/right/up/down`, `user.gaze_curve_*` (only where it says non-linear) and `user.gaze_map_rotation_deg`. Its `residual` line shows the error left with the current values |
 | Everything is off in the same direction / eyes disagree a lot | that's calibration, not gain: ctrl-alt-c at the distance you sit; ctrl-alt-m says which eye is worse (tray → Eye Tracking → Only Left/Right Eye) |
 
-Default gains: half the screen height is 196 mm; 6 mm/mm × ~30 mm of rise
-≈ 180 mm, i.e. a natural look-up lands near the top edge.
+Numbers: on the 24" 1080p at ~48 cm, half the screen height is 152 mm; a
+natural 12 mm rise with `head_pivot_mm = 100` is a 7° pitch that accounts for
+0.28 of the half-screen, so the correction at the top edge is evaluated at
+eccentricity −0.67 instead of −0.95 and comes out near zero. ctrl-alt-d prints
+`pitch_deg` and `credit` live; ctrl-alt-m warns if the head moved during a run.
 
 ## Verifying
 

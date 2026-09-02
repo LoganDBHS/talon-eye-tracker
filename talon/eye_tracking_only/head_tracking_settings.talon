@@ -4,29 +4,47 @@
 os: windows
 -
 settings():
+    # PAUSED 2026-09-01 for the small-monitor test: F4 zoom uses raw gaze
+    # (the gaze hook itself is unhooked via user.head_offset_uninstall).
+    # Set back to 1 when resuming the layer.
+    user.zoom_follows_head_offset = 1
+
+    # ---- how the head is used (rewritten 2026-09-02) ----
+    # The head no longer pushes the cursor. The tracker's gaze point is already
+    # head-compensated; what the ctrl-alt-m correction fixes is the error the
+    # EYES make when they roll far inside the head. So a head tilt is credited
+    # AGAINST that correction: eyes-only to the top edge -> full correction
+    # (as before); head tilted + eyes near neutral -> no correction, raw gaze
+    # trusted. Both ways of looking at a spot land on the same spot.
+    # radius (mm) from the neck pivot to the eyes: pitch = rise / pivot.
+    # Head-tilt look lands SHORT of the eyes-only look -> lower (80);
+    # lands BEYOND it -> raise (130-150).
+    user.head_pivot_mm = 100.0
+    # 1 = full credit (correction by eye-in-head angle); 0 = old behaviour
+    # (correction by screen position). Blend if 1 overshoots on tilts.
+    user.head_credit_y = 1.0
+    user.head_credit_x = 1.0
+
     # ---- vertical (head pitch, measured as eye-centre "rise" in mm) ----
-    # cursor mm per mm of head rise. A comfortable look-up raises the eyes
-    # ~25-35 mm; half the screen is 196 mm, so ~6 reaches the top edge from
-    # centre. Cursor stops short of the top -> raise; overshoots/jittery -> lower.
-    # (recorded 2026-09-01: your natural look-up is only 8-16 mm of rise, so
-    # gain 8 / dead zone 3 -> 150-380 px of lift)
-    user.head_gain_y = 8.0
-    # mm of rise ignored around neutral. Nodding/breathing moves the cursor ->
-    # raise. First bit of a tilt does nothing -> lower.
+    # EXTRA PUSH, cursor mm per mm of head rise, added on top (head as a
+    # mouse). 0 = off. Was 8 until 2026-09-02; only raise it if a head tilt
+    # with the eyes on the target still lands short with the credit above.
+    # (recorded 2026-09-01: your natural look-up is only 8-16 mm of rise)
+    user.head_gain_y = 0.0
+    # mm of rise ignored around neutral. Nodding/breathing changes the
+    # correction -> raise. First bit of a tilt is not credited -> lower.
     user.head_deadzone_y_mm = 3.0
 
     # ---- horizontal (head yaw in degrees) ----
-    # cursor mm per degree of turning. Raise if a comfortable turn doesn't
-    # reach the side edge; lower if twitchy. If the cursor moves the WRONG way
-    # when you turn, make this negative. 0 disables.
-    user.head_gain_x = 10.0
+    # EXTRA PUSH, cursor mm per degree of turning. 0 = off (was 10).
+    user.head_gain_x = 0.0
     # degrees of yaw ignored around neutral (yaw noise is ~1 degree).
     user.head_deadzone_x_deg = 1.5
 
     # ---- dynamics ----
     # low-pass time constant (ms): shaky -> raise; laggy -> lower.
     user.head_smoothing_ms = 80.0
-    # clamp on the offset per axis (cursor mm). 0 = no clamp.
+    # clamp on the extra push per axis (cursor mm). 0 = no clamp.
     user.head_max_offset_mm = 400.0
     # ---- neutral pose ("resting head, facing the centre") ----
     # The neutral pose is the running average of your head height taken ONLY
@@ -39,8 +57,8 @@ settings():
     user.head_neutral_seconds = 5.0
     # how far from centre still counts as "the middle" (0.3 = middle 60%)
     user.head_neutral_zone = 0.3
-    # 1 = only LIFTING the head moves the cursor; lowering it (reading low on
-    # the screen) does nothing and just becomes the new resting height.
+    # 1 = only LIFTING the head counts; lowering it (reading low on the
+    # screen) does nothing and just becomes the new resting height.
     user.head_lift_only = 1
     # resting height follows the head down this fast (s) ...
     user.head_neutral_down_seconds = 2.0
@@ -69,12 +87,13 @@ settings():
     # 140 px short, bottom 50 px short, up over-reached mid-way, map rotated
     # +2.7 deg clockwise. Re-run ctrl-alt-m after any recalibration and paste
     # its SUGGEST lines here (the "residual" line tells you how well they work).
-    user.gaze_gain_left = 0.95
-    user.gaze_curve_left = 0.0
-    user.gaze_gain_right = 0.81
-    user.gaze_curve_right = 0.38
-    user.gaze_gain_up = 0.76
-    user.gaze_curve_up = 0.29
-    user.gaze_gain_down = 1.08
-    user.gaze_curve_down = 0.0
-    user.gaze_map_rotation_deg = 2.7
+    # last applied from ctrl-alt-m: 2026-09-02 11:00 (verdict: gain; previous file in C:\Users\logan\AppData\Roaming\talon\head_tracking_settings.backup)
+    user.gaze_gain_left = 1.04
+    user.gaze_curve_left = 0.00
+    user.gaze_gain_right = 0.98
+    user.gaze_curve_right = 0.00
+    user.gaze_gain_up = 0.77
+    user.gaze_curve_up = 0.38
+    user.gaze_gain_down = 1.31
+    user.gaze_curve_down = -0.30
+    user.gaze_map_rotation_deg = 0.1
