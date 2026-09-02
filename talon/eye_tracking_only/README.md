@@ -23,7 +23,7 @@ this folder; nothing in `community/` or `C:\Program Files\Talon` is edited.
 
 | Key | Action |
 |---|---|
-| ctrl-alt-e | Control Mouse on/off (built-in; gaze + head control are both ON in the tray menu) |
+| ctrl-alt-e | Control Mouse on/off with an ON/OFF notification (`user.control_mouse_toggle_notify`; gaze + head control are both ON in the tray menu) |
 | ctrl-alt-h | head offset on/off (`user.head_offset_toggle`) |
 | ctrl-alt-r | re-centre: the pose you hold NOW becomes neutral (`user.head_offset_recenter`) |
 | ctrl-alt-d | diagnostic logger on/off (`user.tracking_diag_toggle`) |

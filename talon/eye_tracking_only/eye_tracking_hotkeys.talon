@@ -3,8 +3,9 @@
 os: windows
 -
 
-# Toggle Control Mouse (cursor continuously follows gaze + head)
-key(ctrl-alt-e): tracking.control_toggle()
+# Toggle Control Mouse (cursor continuously follows gaze + head); shows a
+# notification with the new state (control_toggle_notify.py)
+key(ctrl-alt-e): user.control_mouse_toggle_notify()
 
 # Toggle Zoom Mouse (fallback mode: discrete trigger + magnified precision stage)
 key(ctrl-alt-z): tracking.control_zoom_toggle()
