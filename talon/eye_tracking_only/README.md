@@ -154,7 +154,11 @@ How it behaves:
   target. Real head motion is blended back in over 150 ms on release.
 * Because of that dead zone Talon may not move the cursor 20 px on its own,
   so the magnet places it with `ctrl.mouse_move` if it is not on the target
-  after `magnet_place_ms` (`magnet_place_cursor = 0` disables this).
+  after `magnet_place_ms` (`magnet_place_cursor = 0` disables this) - as an
+  ease-out glide (`magnet_glide_ms`). Along a long target the cursor then
+  follows the gaze continuously. Talon's own 45 mm hop cannot be smoothed:
+  Control Mouse 2 has no continuous gaze mode (the tray's "mouse jump" toggle
+  is `use_mouse`, the physical-mouse flag - verified 2026-09-02).
 * An orange outline marks the held element (`magnet_highlight`). Nothing
   happens while the control mouse is off, while the F4 overlay is open, or
   over Talon's own windows.
@@ -169,7 +173,7 @@ How it behaves:
 | Loses the target when I blink or glance | raise `user.magnet_release_px` / `user.magnet_release_ms` |
 | Cursor sits next to the target instead of on it | check `user.magnet_place_cursor = 1`; `user.magnet_debug = 1` logs placements and Talon's `mouse_active` state |
 | Wants to snap along a long row/bar | raise `user.magnet_axis_snap_px` |
-| Snap looks jerky / too abrupt | raise `user.magnet_glide_ms` (90 → 140); feels laggy or clicks land short → lower it, 0 = instant hop |
+| Snap looks jerky / too abrupt | raise `user.magnet_glide_ms` (120 → 180); feels laggy or clicks land short → lower it, 0 = instant hop |
 | Anything odd | ctrl-alt-t turns it off; `user.magnet_uninstall()` detaches it until the next reload |
 
 ## Verifying

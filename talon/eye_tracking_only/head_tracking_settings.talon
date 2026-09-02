@@ -103,7 +103,7 @@ settings():
     user.magnet_place_ms = 120
     # the placement glides with an ease-out over about this long (ms); far
     # jumps take up to 1.6x longer. 0 = instant hop (the original behaviour).
-    user.magnet_glide_ms = 90
+    user.magnet_glide_ms = 120
     # thin outline around the held element (user preferred none, 2026-09-02)
     user.magnet_highlight = 0
     # 1 = log every grab / release / placement to talon.log ([magnet] lines)

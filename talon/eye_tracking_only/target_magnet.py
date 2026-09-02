@@ -83,7 +83,7 @@ _SETTINGS = {
               "1 = if Talon has not moved the cursor onto the target after magnet_place_ms, put it there directly "
               "(needed in the control mouse's jump mode). 0 = only steer through the gaze frames."),
     "place_ms": ("magnet_place_ms", 120.0, "How long to give Talon before placing the cursor (ms)."),
-    "glide_ms": ("magnet_glide_ms", 90.0,
+    "glide_ms": ("magnet_glide_ms", 120.0,
                  "Placement glides to the target with an ease-out over about this long (ms; shorter hops are "
                  "quicker, far jumps up to 1.6x longer). 0 = instant hop."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
@@ -392,12 +392,22 @@ class _Worker:
     def place(self, held, gx, gy, now):
         if not _cfg["place"] or now - held.grab_ts < _cfg["place_ms"] / 1000.0:
             return
-        if now - self.last_place < 0.06:
-            return
         sx, sy = held.snap(gx, gy)
         try:
             cx, cy = ctrl.mouse_pos()
         except Exception:
+            return
+        a = _cfg["axis_px"]
+        if held.placed_ts and (held.w > a or held.h > a):
+            # already on a long target: follow the gaze along it continuously (one small
+            # step per tick, ~80 ms time constant) instead of throttled hops
+            if math.hypot(cx - sx, cy - sy) > 1.0:
+                try:
+                    ctrl.mouse_move(int(round(cx + 0.5 * (sx - cx))), int(round(cy + 0.5 * (sy - cy))))
+                except Exception as ex:
+                    _st.last_err = repr(ex)[:120]
+            return
+        if now - self.last_place < 0.06:
             return
         if math.hypot(cx - sx, cy - sy) <= 3.0:
             return
