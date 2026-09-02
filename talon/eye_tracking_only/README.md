@@ -169,6 +169,7 @@ How it behaves:
 | Loses the target when I blink or glance | raise `user.magnet_release_px` / `user.magnet_release_ms` |
 | Cursor sits next to the target instead of on it | check `user.magnet_place_cursor = 1`; `user.magnet_debug = 1` logs placements and Talon's `mouse_active` state |
 | Wants to snap along a long row/bar | raise `user.magnet_axis_snap_px` |
+| Snap looks jerky / too abrupt | raise `user.magnet_glide_ms` (90 → 140); feels laggy or clicks land short → lower it, 0 = instant hop |
 | Anything odd | ctrl-alt-t turns it off; `user.magnet_uninstall()` detaches it until the next reload |
 
 ## Verifying

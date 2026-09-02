@@ -34,7 +34,10 @@ HOW
   * Because of the jump-mode dead zone, Talon may not move the cursor onto a
     target 20 px away at all. If the cursor is not on the snap point
     `magnet_place_ms` after the grab, the thread places it with
-    ctrl.mouse_move (throttled, only when it has drifted > 3 px).
+    ctrl.mouse_move (throttled, only when it has drifted > 3 px) - as a short
+    ease-out glide (`magnet_glide_ms`, 0 = instant hop). Talon reports
+    mouse_active=False after these moves, i.e. it does not mistake them for
+    the physical mouse (verified 2026-09-02).
   * A click-through canvas draws a thin rounded outline around the held
     element (verified not to disturb the hit-test).
 
@@ -80,6 +83,9 @@ _SETTINGS = {
               "1 = if Talon has not moved the cursor onto the target after magnet_place_ms, put it there directly "
               "(needed in the control mouse's jump mode). 0 = only steer through the gaze frames."),
     "place_ms": ("magnet_place_ms", 120.0, "How long to give Talon before placing the cursor (ms)."),
+    "glide_ms": ("magnet_glide_ms", 90.0,
+                 "Placement glides to the target with an ease-out over about this long (ms; shorter hops are "
+                 "quicker, far jumps up to 1.6x longer). 0 = instant hop."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
     "debug": ("magnet_debug", 0.0, "1 = log every grab / release / cursor placement to talon.log."),
 }
@@ -399,14 +405,37 @@ class _Worker:
         held.placed_ts = now
         _st.placements += 1
         try:
-            ctrl.mouse_move(int(round(sx)), int(round(sy)))
+            self.glide(held, cx, cy, sx, sy)
         except Exception as ex:
             _st.last_err = repr(ex)[:120]
             return
+        self.last_place = time.perf_counter()
         if _cfg["debug"]:
             ls = getattr(_em2.control2, "last_state", None)
             extra = f" mouse_active={ls.mouse_active} target_px={ls.target_px}" if ls is not None else ""
             print(f"[magnet] placed cursor ({cx:.0f},{cy:.0f}) -> ({sx:.0f},{sy:.0f}) for {held}{extra}")
+
+
+    def glide(self, held, x0, y0, x1, y1):
+        """Ease-out glide of the cursor to the snap point (runs synchronously in the worker)."""
+        base = _cfg["glide_ms"] / 1000.0
+        dist = math.hypot(x1 - x0, y1 - y0)
+        if base <= 0 or dist < 4:
+            ctrl.mouse_move(int(round(x1)), int(round(y1)))
+            return
+        dur = base * min(1.6, max(0.6, math.sqrt(dist / 60.0)))
+        t0 = time.perf_counter()
+        while True:
+            t = (time.perf_counter() - t0) / dur
+            if t >= 1.0:
+                break
+            e = 1.0 - (1.0 - t) ** 3
+            latest = _st.latest
+            if latest is not None:          # long-axis targets follow the gaze while gliding
+                x1, y1 = held.snap(latest[1], latest[2])
+            ctrl.mouse_move(int(round(x0 + (x1 - x0) * e)), int(round(y0 + (y1 - y0) * e)))
+            time.sleep(0.008)
+        ctrl.mouse_move(int(round(x1)), int(round(y1)))
 
 
 _worker = _Worker()
