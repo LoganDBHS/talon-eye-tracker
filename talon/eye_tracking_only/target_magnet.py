@@ -59,7 +59,7 @@ import time
 import traceback
 from collections import deque
 
-from talon import Module, app, canvas, cron, ctrl, settings, ui
+from talon import Module, actions, app, canvas, cron, ctrl, settings, ui
 from talon.plugins import eye_mouse_2 as _em2
 from talon.types import Point2d, Point3d, Rect
 
@@ -544,7 +544,10 @@ class Actions:
         _st.enabled = not _st.enabled
         if not _st.enabled:
             _release("toggled off")
-        app.notify("Target magnet", "ON" if _st.enabled else "OFF")
+        try:
+            actions.user.banner(f"Target magnet {'ON' if _st.enabled else 'OFF'}", "on" if _st.enabled else "off")
+        except Exception:
+            app.notify("Target magnet", "ON" if _st.enabled else "OFF")
         print(f"[magnet] {'ON' if _st.enabled else 'OFF'}")
 
     def magnet_enabled() -> bool:

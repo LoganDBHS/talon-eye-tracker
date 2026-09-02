@@ -69,7 +69,7 @@ import math
 import os
 import time
 
-from talon import Module, app, cron, settings, tracking_system, ui
+from talon import Module, actions, app, cron, settings, tracking_system, ui
 from talon.plugins import eye_mouse_2 as _em2
 from talon.scripting import rctx
 from talon.types import Point2d
@@ -616,6 +616,14 @@ def live_distance_mm():
     return _st.s_dist
 
 
+def _banner(text, kind="info"):
+    """Top-of-screen banner via control_toggle_notify.py (falls back to app.notify)."""
+    try:
+        actions.user.banner(text, kind)
+    except Exception:
+        app.notify("Head offset", text)
+
+
 def _set_enabled(state):
     _st.enabled = state
     if not state:
@@ -628,7 +636,7 @@ class Actions:
     def head_offset_toggle():
         """Toggle the head-pose cursor offset on/off"""
         _set_enabled(not _st.enabled)
-        app.notify("Head offset", "ON" if _st.enabled else "OFF")
+        _banner(f"Head offset {'ON' if _st.enabled else 'OFF'}", "on" if _st.enabled else "off")
         print(f"[head_offset] {'ON' if _st.enabled else 'OFF'}")
 
     def head_offset_enabled() -> bool:
@@ -646,7 +654,7 @@ class Actions:
         st.offset_px = (0.0, 0.0)
         st.credit = (0.0, 0.0)
         _save_anchor(force=True)
-        app.notify("Head offset", f"Re-centred (rise {st.s_rise:.0f} mm, yaw {st.s_yaw:+.1f} deg)")
+        _banner(f"Head offset re-centred (rise {st.s_rise:.0f} mm, yaw {st.s_yaw:+.1f} deg)", "info")
         print(f"[head_offset] re-centred at rise={st.s_rise:.1f}mm yaw={st.s_yaw:+.1f}deg dist={st.dist:.0f}mm")
 
     def head_offset_status():

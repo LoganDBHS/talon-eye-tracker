@@ -16,7 +16,7 @@ in this folder.
 import statistics
 import time
 
-from talon import Module, app, cron, ctrl, tracking_system, ui
+from talon import Module, actions, app, cron, ctrl, tracking_system, ui
 from talon.scripting import rctx
 
 mod = Module()
@@ -115,6 +115,13 @@ def _poll():
     s.rest_px = s.last_px
 
 
+def _banner(text, kind):
+    try:
+        actions.user.banner(text, kind)
+    except Exception:
+        app.notify("Latency diag", text)
+
+
 def _start():
     s = _s
     if s.on:
@@ -126,7 +133,7 @@ def _start():
     s.results = []
     s.pending = None
     s.rest_px = None
-    app.notify("Latency diag", "ON - make big eye movements; results in talon.log [latency]")
+    _banner("Latency diag ON - make big eye movements", "on")
     print("[latency] ON")
 
 
@@ -148,7 +155,7 @@ def _stop():
         msg = f"{len(s.results)} saccades: median cursor moved +{mv:.0f} ms, arrived +{ar:.0f} ms"
     else:
         msg = "no complete saccades recorded"
-    app.notify("Latency diag", f"OFF - {msg}")
+    _banner(f"Latency diag OFF - {msg}", "off")
     print(f"[latency] OFF - {msg}")
 
 

@@ -1,8 +1,10 @@
 """ctrl-alt-e with feedback, and a record of every control-mouse start/stop.
 
 * `user.control_mouse_toggle_notify()` toggles Talon's control mouse and shows
-  a banner at the top of the screen (green ON / red OFF, ~2.5 s). app.notify
-  is also called, but Windows did not show those for the user (2026-09-02).
+  a banner at the top of the screen (green ON / red OFF, ~2.5 s). No
+  app.notify: Windows toasts were slow / not shown for the user (2026-09-02),
+  the banner is preferred. `user.banner(text, kind)` is the shared helper the
+  other toggles use (kind: on / off / info / warn).
 * The INSTANCE methods start / stop / delayed_stop of Talon's ControlMouse2
   are wrapped so any transition - hotkey, tray menu, zoom mouse, tracker loss,
   whatever - shows the same banner and logs `[control_mouse] ... called from
@@ -12,7 +14,7 @@
 """
 import traceback
 
-from talon import Module, actions, app, canvas, cron, ui
+from talon import Module, actions, canvas, cron, ui
 from talon.plugins import eye_mouse_2 as _em2
 from talon.scripting import rctx
 from talon.types import Rect
@@ -74,10 +76,6 @@ def _announce(state, why):
         text += f"  ({why})"
     print(f"[control_mouse] {text}")
     cron.after("0ms", lambda: _show_banner(text, "30c060" if state == "ON" else "e04040"))
-    try:
-        app.notify("Control mouse", state)
-    except Exception:
-        pass
 
 
 def _caller():
@@ -121,8 +119,16 @@ _c2.stop = _wrapped_stop
 _c2.delayed_stop = _wrapped_delayed_stop
 
 
+_KIND_COLORS = {"on": "30c060", "off": "e04040", "info": "4090e0", "warn": "e0a020"}
+
+
 @mod.action_class
 class Actions:
+    def banner(text: str, kind: str = "info"):
+        """Show a short top-of-screen banner (kind: on / off / info / warn). Faster than app.notify."""
+        color = _KIND_COLORS.get(kind, _KIND_COLORS["info"])
+        cron.after("0ms", lambda: _show_banner(text, color))
+
     def control_mouse_toggle_notify():
         """Toggle the control mouse (tracking.control_toggle) with an on-screen ON / OFF banner"""
         before = _c2.running
