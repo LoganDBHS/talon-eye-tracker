@@ -241,6 +241,19 @@ def _with_pos(eye, pos):
 
 
 # --- worker thread: element lookup, stickiness, cursor placement -----------------
+def _move(x, y):
+    """Move the cursor the way Talon's own control mouse does: register the target in
+    ControlMouse2.ctrl_history first, so Talon's mouse hook does not take the move for
+    the physical mouse (that flagged mouse_active and suppressed gaze hops for up to a
+    second - measured 2026-09-02 16:36-16:55; registering first = no flag, verified)."""
+    xi, yi = int(round(x)), int(round(y))
+    try:
+        _em2.control2.ctrl_history.append(Point2d(xi, yi))
+    except Exception:
+        pass
+    ctrl.mouse_move(xi, yi)
+
+
 def _elem(x, y):
     try:
         return ui.element_at(int(round(x)), int(round(y)))
@@ -429,7 +442,7 @@ class _Worker:
         base = _cfg["glide_ms"] / 1000.0
         dist = math.hypot(x1 - x0, y1 - y0)
         if base <= 0 or dist < 4:
-            ctrl.mouse_move(int(round(x1)), int(round(y1)))
+            _move(x1, y1)
             return
         dur = base * min(1.6, max(0.6, math.sqrt(dist / 60.0)))
         t0 = time.perf_counter()
@@ -441,9 +454,9 @@ class _Worker:
             latest = _st.latest
             if latest is not None:          # long-axis targets follow the gaze while gliding
                 x1, y1 = held.snap(latest[1], latest[2])
-            ctrl.mouse_move(int(round(x0 + (x1 - x0) * e)), int(round(y0 + (y1 - y0) * e)))
+            _move(x0 + (x1 - x0) * e, y0 + (y1 - y0) * e)
             time.sleep(0.008)
-        ctrl.mouse_move(int(round(x1)), int(round(y1)))
+        _move(x1, y1)
 
 
 _worker = _Worker()
