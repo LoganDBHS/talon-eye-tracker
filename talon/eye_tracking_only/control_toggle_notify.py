@@ -42,7 +42,7 @@ def _close_banner():
 def _show_banner(text, color):
     _close_banner()
     r = ui.main_screen().rect
-    w, h = 520, 70
+    w, h = max(360, min(int(r.width) - 80, 70 + int(len(text) * 14.5))), 70   # fit the text
     rect = Rect(r.x + (r.width - w) / 2, r.y + 30, w, h)
 
     def draw(c):
