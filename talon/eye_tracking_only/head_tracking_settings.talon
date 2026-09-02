@@ -84,7 +84,7 @@ settings():
     # gaze must stay within settle_px for settle_ms before an element is looked
     # up. Grabs too eagerly while reading -> raise settle_ms (150); feels slow
     # to lock on -> lower (60).
-    user.magnet_settle_ms = 90
+    user.magnet_settle_ms = 60
     user.magnet_settle_px = 40
     # how far around the settled point to look for a clickable element (px).
     # Misses small buttons you are clearly looking at -> raise (40); grabs
@@ -105,10 +105,11 @@ settings():
     # move the cursor 20 px on its own, so the magnet places the cursor itself
     # if it is not on the target after place_ms. 0 = never touch the cursor.
     user.magnet_place_cursor = 1
-    user.magnet_place_ms = 120
-    # the placement glides with an ease-out over about this long (ms); far
-    # jumps take up to 1.6x longer. 0 = instant hop (the original behaviour).
-    user.magnet_glide_ms = 120
+    user.magnet_place_ms = 30
+    # optional ease-out glide for the placement (ms). 0 = instant hop. Keep 0:
+    # a run of small moves makes Talon think the physical mouse is in use and
+    # pause gaze control (measured 2026-09-02 with ctrl-alt-l).
+    user.magnet_glide_ms = 0
     # thin outline around the held element (user preferred none, 2026-09-02)
     user.magnet_highlight = 0
     # 1 = log every grab / release / placement to talon.log ([magnet] lines)

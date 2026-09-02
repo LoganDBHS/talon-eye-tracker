@@ -29,3 +29,7 @@ key(ctrl-alt-u): user.head_offset_uninstall()
 # Toggle the target magnet (target_magnet.py): snap the cursor onto the UI
 # element you are looking at and hold it there
 key(ctrl-alt-t): user.magnet_toggle()
+
+# Latency diagnostic (latency_diag.py): times how long the cursor takes to
+# follow a big eye movement; results as [latency] lines in talon.log
+key(ctrl-alt-l): user.latency_diag_toggle()

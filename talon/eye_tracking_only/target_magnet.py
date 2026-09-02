@@ -12,13 +12,16 @@ WHY (2026-09-02)
 HOW
   * head_offset.py calls `_filter(frame, x, y)` from the tracker thread (~90 Hz)
     with the CORRECTED gaze point in pixels. The filter only records samples
-    and, while a target is held, rewrites the frame it hands on to Talon's
-    control mouse: gaze = the snap point, eye positions = frozen at grab time.
-    Freezing the eye positions matters: the control mouse runs in jump mode
-    (45 mm zones, measured 2026-09-02) where small gaze changes are ignored
-    and the HEAD does the fine positioning - a still head means Talon never
-    drags the cursor off the target. Real head motion resumes on release,
-    blended in over ~150 ms so there is no jump.
+    and, while a target is held, freezes the eye POSITIONS in the frame it
+    hands on to Talon's control mouse (the gaze itself is passed through
+    untouched). Freezing the eye positions matters: the control mouse runs in
+    jump mode (45 mm zones, measured 2026-09-02) where small gaze changes are
+    ignored and the HEAD does the fine positioning - a still head means Talon
+    never drags the cursor off the target. Real head motion resumes on
+    release, blended in over ~150 ms so there is no jump. (An earlier version
+    also replaced the gaze with the snap point; the step back to the real gaze
+    on release made Talon suppress its hop for 300-1300 ms - measured with
+    ctrl-alt-l on 2026-09-02 - so it was dropped.)
   * A background thread (Windows UI Automation works off the main thread,
     ~2-8 ms per lookup, verified) ticks every 40 ms: when the gaze has been
     within `magnet_settle_px` for `magnet_settle_ms` it hit-tests the settled
@@ -66,7 +69,7 @@ mod = Module()
 
 _SETTINGS = {
     "on": ("magnet_on", 1.0, "1 = the target magnet is active (ctrl-alt-t toggles it at runtime)."),
-    "settle_ms": ("magnet_settle_ms", 90.0,
+    "settle_ms": ("magnet_settle_ms", 60.0,
                   "The gaze must stay within magnet_settle_px for this long (ms) before an element is looked up."),
     "settle_px": ("magnet_settle_px", 40.0, "Radius (px) the gaze may wander in while still counting as settled."),
     "reach_px": ("magnet_reach_px", 30.0,
@@ -83,8 +86,8 @@ _SETTINGS = {
     "place": ("magnet_place_cursor", 1.0,
               "1 = if Talon has not moved the cursor onto the target after magnet_place_ms, put it there directly "
               "(needed in the control mouse's jump mode). 0 = only steer through the gaze frames."),
-    "place_ms": ("magnet_place_ms", 120.0, "How long to give Talon before placing the cursor (ms)."),
-    "glide_ms": ("magnet_glide_ms", 120.0,
+    "place_ms": ("magnet_place_ms", 30.0, "How long to give Talon before placing the cursor (ms)."),
+    "glide_ms": ("magnet_glide_ms", 0.0,
                  "Placement glides to the target with an ease-out over about this long (ms; shorter hops are "
                  "quicker, far jumps up to 1.6x longer). 0 = instant hop."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
@@ -206,23 +209,20 @@ def _filter(f, x, y):
                 f.left = _with_pos(l, _lerp3(fl, l.pos, a))
                 f.right = _with_pos(r_, _lerp3(fr, r_.pos, a))
         return False
-    # a target is held: feed Talon the snap point and a perfectly still head
+    # a target is held: Talon keeps receiving the REAL gaze (replacing it with the snap
+    # point and stepping back on release made Talon's hop logic see a huge velocity and
+    # suppress hops for 300-1300 ms - measured 2026-09-02 16:36) but a perfectly still
+    # head, so its head control cannot drag the cursor off the target. The cursor itself
+    # is placed by the worker.
     if _st.frozen is None and both:
         _st.frozen = (_copy3(l.pos), _copy3(r_.pos))
-    sx, sy = held.snap(x, y)
-    rect = head_offset.screen_rect()
-    p = Point2d((sx - rect.x) / rect.width, (sy - rect.y) / rect.height)
-    f.gaze = p
     fz = _st.frozen
-    for name, eye, fpos in (("left", l, fz[0] if fz else None), ("right", r_, fz[1] if fz else None)):
-        if not eye.detected:
-            continue
-        e = copy.copy(eye)
-        if e.gaze is not None:
-            e.gaze = p
-        if fpos is not None:
-            e.pos = fpos
-        setattr(f, name, e)
+    if fz is None:
+        return False
+    if l.detected:
+        f.left = _with_pos(l, fz[0])
+    if r_.detected:
+        f.right = _with_pos(r_, fz[1])
     return True
 
 
@@ -403,19 +403,11 @@ class _Worker:
             cx, cy = ctrl.mouse_pos()
         except Exception:
             return
-        a = _cfg["axis_px"]
-        if held.placed_ts and (held.w > a or held.h > a):
-            # already on a long target: follow the gaze along it continuously (one small
-            # step per tick, ~80 ms time constant) instead of throttled hops
-            if math.hypot(cx - sx, cy - sy) > 1.0:
-                try:
-                    ctrl.mouse_move(int(round(cx + 0.5 * (sx - cx))), int(round(cy + 0.5 * (sy - cy))))
-                except Exception as ex:
-                    _st.last_err = repr(ex)[:120]
+        # single hops only: a run of small moves (the glide / continuous follow tried
+        # 2026-09-02) makes Talon flag the physical mouse as active and pause gaze control
+        if now - self.last_place < 0.1:
             return
-        if now - self.last_place < 0.06:
-            return
-        if math.hypot(cx - sx, cy - sy) <= 3.0:
+        if math.hypot(cx - sx, cy - sy) <= (6.0 if held.placed_ts else 3.0):
             return
         self.last_place = now
         held.placed_ts = now

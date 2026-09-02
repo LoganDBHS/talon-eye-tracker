@@ -156,8 +156,7 @@ How it behaves:
 * Sticky: the target is kept while the gaze stays inside its rectangle plus
   `magnet_release_px`; settling on a different clickable element switches at
   once; the element is re-checked every 400 ms so scrolling releases it.
-* While held, Talon receives the snap point as the gaze and a **frozen head
-  pose**. The control mouse runs in jump mode (zone 45 mm, measured
+* While held, Talon receives the real gaze and a **frozen head pose**. The control mouse runs in jump mode (zone 45 mm, measured
   2026-09-02) where small gaze changes are ignored and the head does fine
   positioning, so a still head means Talon never drags the cursor off the
   target. Real head motion is blended back in over 150 ms on release.
@@ -182,7 +181,8 @@ How it behaves:
 | Loses the target when I blink or glance | raise `user.magnet_release_px` / `user.magnet_release_ms` |
 | Cursor sits next to the target instead of on it | check `user.magnet_place_cursor = 1`; `user.magnet_debug = 1` logs placements and Talon's `mouse_active` state |
 | Wants to snap along a long row/bar | raise `user.magnet_axis_snap_px` |
-| Snap looks jerky / too abrupt | raise `user.magnet_glide_ms` (120 → 180); feels laggy or clicks land short → lower it, 0 = instant hop |
+| Snap looks jerky / too abrupt | `user.magnet_glide_ms` > 0 glides instead of hopping, but multi-step moves make Talon pause gaze control (measured: 300-1300 ms hop delays) - prefer 0 |
+| Cursor is slow to follow big eye movements | ctrl-alt-l, do ten sweeps, ctrl-alt-l: `[latency]` lines in talon.log show moved/arrived times per sweep. Typical 2026-09-02 after fixes: see the module notes |
 | Anything odd | ctrl-alt-t turns it off; `user.magnet_uninstall()` detaches it until the next reload |
 
 ## Verifying
