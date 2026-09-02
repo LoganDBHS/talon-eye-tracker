@@ -77,6 +77,7 @@ class _Run:
     latest = None        # latest GazeFrame
     samples = []         # (gaze_ecc, left_ecc|None, right_ecc|None, cursor_ecc|None)
     lifts = []           # head rise above resting (mm) per sample, from head_offset
+    dists = []           # eye distance (mm) per sample, from head_offset
     per_target = []
     report_lines = []
     rect = None
@@ -136,14 +137,17 @@ def _tick():
         timed_out = now - run.phase_t0 >= SETTLE_MAX_S
         if dwelt or timed_out:
             run.unsettled = not dwelt
-            run.phase, run.phase_t0, run.samples, run.lifts = "sample", now, [], []
+            run.phase, run.phase_t0, run.samples, run.lifts, run.dists = "sample", now, [], [], []
     elif run.phase == "sample":
         s = _sample_now()
         if s is not None:
             run.samples.append(s)
-            lift = head_offset.status_snapshot().get("d_rise_mm")
+            snap = head_offset.status_snapshot()
+            lift = snap.get("d_rise_mm")
             if lift is not None:
                 run.lifts.append(lift)
+            if snap.get("dist_mm"):
+                run.dists.append(snap["dist_mm"])
         if now - run.phase_t0 >= SAMPLE_S:
             _finish_target()
             run.idx += 1
@@ -178,6 +182,8 @@ def _finish_target():
         entry["measured_ecc"] = entry["gaze_ecc"]
         if run.lifts:
             entry["head_lift_mm"] = round(statistics.median(run.lifts), 1)
+        if run.dists:
+            entry["dist_mm"] = round(statistics.median(run.dists))
     run.per_target.append(entry)
     print(f"[gazemeasure] {label}: {entry}")
 
@@ -292,6 +298,13 @@ def _compute_results():
     if rot is not None:
         sugg.append(f"user.gaze_map_rotation_deg = {rot:.1f}")
         out["suggest"]["rotation"] = round(rot, 2)
+    dists = [e["dist_mm"] for e in good if e.get("dist_mm")]
+    if dists:
+        dist_mm = round(statistics.median(dists))
+        sugg.append(f"user.gaze_ref_distance_mm = {dist_mm}")
+        out["suggest"]["distance_mm"] = dist_mm
+        lines.append(f"measured at eye distance {dist_mm} mm (range {min(dists)}-{max(dists)}); the gains above "
+                     f"are rescaled live when you sit nearer/farther (gaze_ref_distance_mm)")
     for s in sugg:
         lines.append("SUGGEST " + s)
 
@@ -428,8 +441,8 @@ def _fmt(v, nd):
 def apply_suggestions():
     """Write the last run's SUGGEST values into head_tracking_settings.talon.
 
-    Only the `user.gaze_gain_*`, `user.gaze_curve_*` and `user.gaze_map_rotation_deg`
-    lines that have a suggestion are rewritten in place (everything else in the
+    Only the `user.gaze_gain_*`, `user.gaze_curve_*`, `user.gaze_map_rotation_deg` and
+    `user.gaze_ref_distance_mm` lines that have a suggestion are rewritten in place (everything else in the
     file, comments included, is untouched). Directions with no usable data keep
     their current values. The previous file is copied to _BACKUP first. Talon
     hot-reloads the settings file, so head_offset.py picks the values up at once.
@@ -450,6 +463,8 @@ def apply_suggestions():
     for direction, d in run.suggest.items():
         if direction == "rotation":
             wanted["gaze_map_rotation_deg"] = _fmt(d, 1)
+        elif direction == "distance_mm":
+            wanted["gaze_ref_distance_mm"] = _fmt(d, 0)
         else:
             wanted[f"gaze_gain_{direction}"] = _fmt(d["gain"], 2)
             wanted[f"gaze_curve_{direction}"] = _fmt(d["curve"], 2)

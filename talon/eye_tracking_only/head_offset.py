@@ -37,6 +37,9 @@ HOW IT WORKS (rewritten 2026-09-01)
       v_eye = v_gaze - credit_v * head_credit_y
       corrected v = v_gaze + [v_eye*(k-1) + q*v_eye*|v_eye|]   (k, q per side)
   and the same for yaw horizontally. Eyes-only up to the top edge: v_eye = v,
+  (2026-09-02 evening: the correction is evaluated at v_eye*D0/D and scaled by
+  D/D0, D0 = gaze_ref_distance_mm from ctrl-alt-m, D = live eye distance -
+  same eye angle, whatever the sitting distance.)
   the full correction applies (as before). Head tilted, eyes near neutral:
   v_eye ~ 0, no correction, the raw point is trusted. Both ways of looking at
   a spot land on the same spot, and the head is not asked to do anything
@@ -136,6 +139,10 @@ _SETTINGS = {
     "q_down": ("gaze_curve_down", 0.0, "Quadratic term toward the BOTTOM edge."),
     "rot": ("gaze_map_rotation_deg", 0.0,
             "Rotation of the gaze map as MEASURED by ctrl-alt-m (deg, + = clockwise); it is undone here."),
+    "ref_dist": ("gaze_ref_distance_mm", 0.0,
+                 "Eye distance (mm) at which the gain/curve/rotation were measured (ctrl-alt-m Apply writes it). "
+                 "The correction is really a function of the eyes' angle, so at another distance it is evaluated "
+                 "at eccentricity*ref/dist and scaled back by dist/ref. 0 = off (correct by screen position)."),
     "gsmooth_ms": ("gaze_smoothing_ms", 90.0,
                    "Extra low-pass (time constant, ms) on the corrected gaze before Talon sees it. "
                    "Higher = steadier cursor for small targets but laggier; 0 = off. Try 60-150."),
@@ -206,6 +213,7 @@ def _update_screen(*_args):
 class _State:
     enabled = True
     s_rise = s_yaw = None      # smoothed pose
+    s_dist = None              # smoothed eye distance (mm) for the distance normalisation
     a_rise = a_yaw = None      # anchor (neutral) pose
     raw_rise = raw_yaw = dist = None
     last_ts = 0.0
@@ -250,11 +258,17 @@ def _transform(x, y, offset=None, credit=None):
         dx, dy = dx * cs - dy * sn, dx * sn + dy * cs
     u, v = dx / g.hx, dy / g.hy
     cu, cv = _st.credit if credit is None else credit
+    # distance normalisation: the correction is a function of eye ANGLE. An eccentricity e
+    # at the live distance D is the same angle as e*D0/D at the measurement distance D0,
+    # and an angular error measured there spans D/D0 as much screen here.
+    ref, d = c["ref_dist"], _st.s_dist
+    rs = ref / d if ref > 0 and d and d > 100 else 1.0
+    rs = max(0.5, min(2.0, rs))
     # the correction was measured with the head still, so it is a function of how far
     # the eyes are turned INSIDE the head: subtract the part of the eccentricity the
     # head pose already accounts for, evaluate there, add the result to the raw point
-    u += _correction(u - cu, c["k_right"], c["q_right"], c["k_left"], c["q_left"])
-    v += _correction(v - cv, c["k_down"], c["q_down"], c["k_up"], c["q_up"])
+    u += _correction((u - cu) * rs, c["k_right"], c["q_right"], c["k_left"], c["q_left"]) / rs
+    v += _correction((v - cv) * rs, c["k_down"], c["q_down"], c["k_up"], c["q_up"]) / rs
     ox, oy = _st.offset_px if offset is None else offset
     X = g.cx + u * g.hx + ox
     Y = g.cy + v * g.hy + oy
@@ -450,11 +464,12 @@ def _on_gaze(frame):
     st.last_seen = ts
     tau = c["smooth_ms"] / 1000.0
     if st.s_rise is None or gap > 1.0:
-        st.s_rise, st.s_yaw = rise, yaw            # (re)acquire: snap, don't slew
+        st.s_rise, st.s_yaw, st.s_dist = rise, yaw, dist     # (re)acquire: snap, don't slew
     else:
         a = dt / (tau + dt) if tau > 0 else 1.0
         st.s_rise += a * (rise - st.s_rise)
         st.s_yaw += a * (yaw - st.s_yaw)
+        st.s_dist += a * (dist - st.s_dist)
 
     if st.a_rise is None or (c["lost_s"] > 0 and gap > c["lost_s"]):
         # first sight / came back: start a new neutral, but let it SETTLE over
@@ -502,7 +517,7 @@ def _on_gaze(frame):
     pivot = c["pivot_mm"] if c["pivot_mm"] > 0 else 100.0
     pitch = max(-1.0, min(1.0, lift / pivot))
     st.pitch_deg, st.yaw_deg = math.degrees(pitch), turn
-    d = dist if dist and dist > 100 else 600.0
+    d = st.s_dist if st.s_dist and st.s_dist > 100 else 600.0
     cv = -c["credit_y"] * d * math.tan(pitch) / _geo.hy_mm
     cu = c["credit_x"] * d * math.tan(math.radians(max(-60.0, min(60.0, turn)))) / _geo.hx_mm
     st.credit = (max(-1.0, min(1.0, cu)), max(-1.0, min(1.0, cv)))
@@ -581,7 +596,14 @@ def status_snapshot():
         d["d_yaw_deg"] = round(st.s_yaw - st.a_yaw, 1)
         d["pitch_deg"] = round(st.pitch_deg, 1)
         d["credit"] = (round(st.credit[0], 2), round(st.credit[1], 2))
+    if st.s_dist:
+        d["dist_mm"] = round(st.s_dist)
     return d
+
+
+def live_distance_mm():
+    """Smoothed eye distance (mm) or None."""
+    return _st.s_dist
 
 
 def _set_enabled(state):

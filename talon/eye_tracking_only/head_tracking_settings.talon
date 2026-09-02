@@ -135,3 +135,9 @@ settings():
     user.gaze_gain_down = 1.31
     user.gaze_curve_down = -0.30
     user.gaze_map_rotation_deg = 0.1
+    # eye distance (mm) the values above were measured at. The correction is
+    # really a function of eye angle, so it is rescaled to your live distance
+    # (lean in -> stronger, sit back -> weaker). ctrl-alt-m Apply writes the
+    # measured value; 0 = off. 532 = live reading 2026-09-02 16:16 (the 11:00
+    # run did not record its distance - re-run ctrl-alt-m + Apply to lock it).
+    user.gaze_ref_distance_mm = 532

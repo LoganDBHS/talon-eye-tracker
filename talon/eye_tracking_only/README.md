@@ -114,7 +114,15 @@ Edit `head_tracking_settings.talon`, save; values apply within 250 ms.
 | Cursor lags the head | lower `user.head_smoothing_ms` (80 → 40) |
 | Anything goes wild | ctrl-alt-h turns the head part off (correction stays); `user.head_max_offset_mm` clamps the push (400) |
 | Gaze itself stops short of / overshoots an edge (head still) | run ctrl-alt-m and paste its `SUGGEST` lines: per-side `user.gaze_gain_left/right/up/down`, `user.gaze_curve_*` (only where it says non-linear) and `user.gaze_map_rotation_deg`. Its `residual` line shows the error left with the current values |
+| Edges stop short when I lean in / overshoot when I sit back | `user.gaze_ref_distance_mm` must be the distance the gains were measured at (ctrl-alt-m Apply writes it; ctrl-alt-d prints `dist_mm` live). 0 turns the rescaling off |
 | Everything is off in the same direction / eyes disagree a lot | that's calibration, not gain: ctrl-alt-c at the distance you sit; ctrl-alt-m says which eye is worse (tray → Eye Tracking → Only Left/Right Eye) |
+
+Distance normalisation (2026-09-02): the gain/curve correction is a function
+of eye angle, not screen position. With `gaze_ref_distance_mm` = D0 set, an
+eccentricity e at the live distance D is evaluated as e*D0/D and the result is
+scaled by D/D0, so the values measured once stay right when you lean in or
+sit back (10 cm nearer = roughly 20 % more correction at the edge). ctrl-alt-m
+now records the median eye distance of the run and Apply writes it.
 
 Numbers: on the 24" 1080p at ~48 cm, half the screen height is 152 mm; a
 natural 12 mm rise with `head_pivot_mm = 100` is a 7° pitch that accounts for
