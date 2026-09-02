@@ -64,6 +64,7 @@ head data on demand and `gaze_measure.py` measures the implied gaze gain.
 | `Ctrl+Alt+R` | re-centre (current pose = neutral) |
 | `Ctrl+Alt+D` | tracking diagnostic logger on/off |
 | `Ctrl+Alt+M` | gaze gain measurement overlay (Esc cancels) |
+| `Ctrl+Alt+T` | target magnet on/off: the cursor snaps onto the button / tab / link you look at and stays there until your gaze leaves (`target_magnet.py`, added 2026-09-02, uses Windows UI Automation) |
 | `Ctrl+Alt+Y` / `Ctrl+Alt+N` | on the measurement results page: apply its SUGGEST values to `head_tracking_settings.talon` (previous file kept as `%APPDATA%\Talon\head_tracking_settings.backup`) / discard. Same as the Apply / Discard buttons; nothing changes unless you apply |
 
 Full details, tuning table and gotchas: `talon/eye_tracking_only/README.md`.

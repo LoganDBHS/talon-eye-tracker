@@ -287,7 +287,8 @@ def _corrected_frame(frame):
     """Copy of the GazeFrame with gaze points corrected; the original if nothing to do."""
     l, r = frame.left, frame.right
     one_eye = _cfg["mirror"] and (l.detected != r.detected)
-    if _identity[0] and _st.offset_px == (0.0, 0.0) and not one_eye:
+    post = _post[0]
+    if _identity[0] and _st.offset_px == (0.0, 0.0) and not one_eye and post is None:
         return frame   # (the credit only acts through the correction, which is identity here)
     f = copy.copy(frame)
     if one_eye:
@@ -316,7 +317,36 @@ def _corrected_frame(frame):
             e = eye if eye is not getattr(frame, name) else copy.copy(eye)
             e.gaze = _smooth(name, _correct_norm(eye.gaze), frame.ts)
             setattr(f, name, e)
+    if post is not None and f.gaze is not None:
+        # target_magnet.py: may rewrite the frame (snap point, frozen head) before Talon sees it
+        try:
+            rr = _geo.rect
+            post(f, rr.x + f.gaze.x * rr.width, rr.y + f.gaze.y * rr.height)
+        except Exception:
+            now = time.perf_counter()
+            if now - _post_err[0] > 5.0:
+                _post_err[0] = now
+                import traceback
+                print("[head_offset] post filter error:", traceback.format_exc()[-400:])
     return f
+
+
+# post filter on the corrected frame (target_magnet.py registers itself here; it imports
+# this module, so it re-registers after every reload of this file)
+_post = [None]
+_post_err = [0.0]
+
+
+def set_post_filter(fn):
+    _post[0] = fn
+
+
+def post_filter():
+    return _post[0]
+
+
+def screen_rect():
+    return _geo.rect
 
 
 # extra steadiness low-pass on the corrected gaze (user.gaze_smoothing_ms);

@@ -71,6 +71,41 @@ settings():
     # Steadier for small targets -> raise (150); laggy -> lower; 0 = off.
     user.gaze_smoothing_ms = 90.0
 
+    # ---- target magnet (target_magnet.py, ctrl-alt-t) ----
+    # Snaps the cursor onto the button / tab / link / list row you are looking
+    # at, using Windows UI Automation, and holds it there until your gaze
+    # clearly leaves. Aim: no F4 zoom for ordinary clicking. 0 = off.
+    user.magnet_on = 1
+    # gaze must stay within settle_px for settle_ms before an element is looked
+    # up. Grabs too eagerly while reading -> raise settle_ms (150); feels slow
+    # to lock on -> lower (60).
+    user.magnet_settle_ms = 90
+    user.magnet_settle_px = 40
+    # how far around the settled point to look for a clickable element (px).
+    # Misses small buttons you are clearly looking at -> raise (40); grabs
+    # neighbours you did not mean -> lower (20).
+    user.magnet_reach_px = 30
+    # an element side up to this long snaps to its centre on that axis; longer
+    # sides (list rows, address bar) let the cursor follow the gaze along them.
+    user.magnet_axis_snap_px = 110
+    # the gaze must leave the element by more than release_px, for release_ms,
+    # before it lets go. Hard to get off a target -> lower; loses the target
+    # while you blink/glance -> raise.
+    user.magnet_release_px = 40
+    user.magnet_release_ms = 80
+    # 1 = also grab small icons/labels that report no click behaviour (they
+    # usually sit inside a button Windows did not report).
+    user.magnet_passive = 1
+    # Talon's control mouse runs in jump mode (45 mm dead zone): it will not
+    # move the cursor 20 px on its own, so the magnet places the cursor itself
+    # if it is not on the target after place_ms. 0 = never touch the cursor.
+    user.magnet_place_cursor = 1
+    user.magnet_place_ms = 120
+    # thin outline around the held element
+    user.magnet_highlight = 1
+    # 1 = log every grab / release / placement to talon.log ([magnet] lines)
+    user.magnet_debug = 0
+
     # ---- edge behaviour ----
     # magnet: corrected gaze within this many px of an edge snaps onto it.
     user.gaze_edge_snap_px = 30.0

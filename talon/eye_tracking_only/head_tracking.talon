@@ -25,3 +25,7 @@ key(ctrl-alt-n): user.gaze_measure_discard()
 # Unhook the gaze-frame correction entirely until the next Talon restart / reload
 # (raw gaze to the control mouse; used for the small-monitor test)
 key(ctrl-alt-u): user.head_offset_uninstall()
+
+# Toggle the target magnet (target_magnet.py): snap the cursor onto the UI
+# element you are looking at and hold it there
+key(ctrl-alt-t): user.magnet_toggle()

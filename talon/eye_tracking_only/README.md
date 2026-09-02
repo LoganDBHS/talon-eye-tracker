@@ -16,6 +16,7 @@ this folder; nothing in `community/` or `C:\Program Files\Talon` is edited.
 | **`head_tracking.talon`** | hotkeys for the layer (below) |
 | **`tracking_diag.py`** | on-demand tracking logger (talon.log + CSV) |
 | **`gaze_measure.py`** | gaze-gain measurement overlay (Task 4 fallback) |
+| **`target_magnet.py`** | snaps the cursor onto the UI element you look at (added 2026-09-02) |
 | `eye_tracking_tuning.py` | commented-out legacy/zoom knobs |
 
 ## Hotkeys
@@ -27,6 +28,7 @@ this folder; nothing in `community/` or `C:\Program Files\Talon` is edited.
 | ctrl-alt-r | re-centre: the pose you hold NOW becomes neutral (`user.head_offset_recenter`) |
 | ctrl-alt-d | diagnostic logger on/off (`user.tracking_diag_toggle`) |
 | ctrl-alt-m | gaze gain measurement overlay, Esc cancels (`user.gaze_measure_start`) |
+| ctrl-alt-t | target magnet on/off (`user.magnet_toggle`) |
 | F4 / Shift-F4 | zoom overlay open / cancel (unchanged) |
 
 ## What the tracker actually gives Talon (why this layer exists)
@@ -120,6 +122,55 @@ natural 12 mm rise with `head_pivot_mm = 100` is a 7° pitch that accounts for
 eccentricity −0.67 instead of −0.95 and comes out near zero. ctrl-alt-d prints
 `pitch_deg` and `credit` live; ctrl-alt-m warns if the head moved during a run.
 
+## Target magnet (added 2026-09-02)
+
+The tracker's own accuracy is about 0.5-1° of visual angle: 15-30 px of
+scatter at 48 cm on this screen, while Chrome toolbar buttons are 43-60 px,
+tab close buttons 50 px and taskbar buttons 77 px (measured with a UI
+Automation census of the screen). Small targets were therefore hit-or-miss
+without the F4 zoom. `target_magnet.py` asks Windows what is under and around
+the settled gaze (`talon.ui.element_at`, UI Automation) and holds the cursor
+on the element until the gaze clearly leaves. Clicking stays physical.
+
+How it behaves:
+
+* The gaze must sit still (`magnet_settle_px` for `magnet_settle_ms`) before
+  anything is looked up. Buttons, links, tabs, menu items, check boxes, list
+  and tree rows, combo boxes, scrollbars and small edit fields count as
+  targets; documents, big panes and text areas do not.
+* If the hit is only a button's icon or label (Windows often reports the
+  child), the enclosing button is recovered by hit-testing just outside the
+  child. If the hit is a container, a ring of `magnet_reach_px` around the
+  point is probed and the nearest clickable element wins.
+* Short sides snap to the centre; a side longer than `magnet_axis_snap_px`
+  lets the cursor follow the gaze along it (list rows, the address bar).
+* Sticky: the target is kept while the gaze stays inside its rectangle plus
+  `magnet_release_px`; settling on a different clickable element switches at
+  once; the element is re-checked every 400 ms so scrolling releases it.
+* While held, Talon receives the snap point as the gaze and a **frozen head
+  pose**. The control mouse runs in jump mode (zone 45 mm, measured
+  2026-09-02) where small gaze changes are ignored and the head does fine
+  positioning, so a still head means Talon never drags the cursor off the
+  target. Real head motion is blended back in over 150 ms on release.
+* Because of that dead zone Talon may not move the cursor 20 px on its own,
+  so the magnet places it with `ctrl.mouse_move` if it is not on the target
+  after `magnet_place_ms` (`magnet_place_cursor = 0` disables this).
+* An orange outline marks the held element (`magnet_highlight`). Nothing
+  happens while the control mouse is off, while the F4 overlay is open, or
+  over Talon's own windows.
+
+| Symptom | Change |
+|---|---|
+| Grabs things while I am just reading | raise `user.magnet_settle_ms` (90 → 150) or set `user.magnet_passive = 0` |
+| Slow to lock on | lower `user.magnet_settle_ms` (90 → 60) |
+| Misses a small button I am clearly looking at | raise `user.magnet_reach_px` (30 → 40) |
+| Grabs the neighbour instead | lower `user.magnet_reach_px` (30 → 20) |
+| Hard to get off a target | lower `user.magnet_release_px` (40 → 25) |
+| Loses the target when I blink or glance | raise `user.magnet_release_px` / `user.magnet_release_ms` |
+| Cursor sits next to the target instead of on it | check `user.magnet_place_cursor = 1`; `user.magnet_debug = 1` logs placements and Talon's `mouse_active` state |
+| Wants to snap along a long row/bar | raise `user.magnet_axis_snap_px` |
+| Anything odd | ctrl-alt-t turns it off; `user.magnet_uninstall()` detaches it until the next reload |
+
 ## Verifying
 
 1. ctrl-alt-d → sit normally, tilt your head up, look back. `talon.log` gets a
@@ -153,3 +204,16 @@ eccentricity −0.67 instead of −0.95 and comes out near zero. ctrl-alt-d prin
 * Removing the layer: delete `head_offset.py` *after* running
   `user.head_offset_uninstall()` (or restart Talon); ctrl-alt-h alone leaves
   the proxy installed but inert.
+* UI Automation from Talon (`talon.ui.element_at`): wants **int** coordinates
+  (screen rects are floats), takes 2-8 ms, works from a background thread,
+  and is NOT disturbed by a click-through Talon canvas over the point. It has
+  no `parent` accessor; hit-testing 3 px outside a child's rect finds the
+  enclosing control. Chrome, XAML (taskbar) and Win32 all answer.
+* Talon warns "User script started a thread" for `target_magnet.py`; user
+  threads are not stopped on reload, so the module keeps its stop event on
+  `eye_mouse_2.control2` and the new instance stops the old thread.
+* ControlMouse2 internals (via `control2.last_state`): `zone1_mm = zone2_mm =
+  45`, `gaze_active1/2`, `head_active`, `mouse_active`, `target_px`,
+  `ctrl_px`. Gaze changes inside the zone do not move the cursor - the head
+  does - which is why the magnet must freeze the head pose and place the
+  cursor itself.
