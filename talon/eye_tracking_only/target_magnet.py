@@ -27,8 +27,9 @@ HOW
     `magnet_reach_px` around the point when the hit is a container. The
     smallest clickable thing wins.
   * Sticky: the target is kept while the gaze stays inside its rectangle plus
-    `magnet_release_px`; a settled gaze on a DIFFERENT clickable element
-    switches at once. The element is re-checked every 400 ms (windows scroll
+    `magnet_release_px` (a gaze further than 3x that / 120 px releases on the
+    very next frame, so a saccade away is never delayed); a settled gaze on a
+    DIFFERENT clickable element switches at once. The element is re-checked every 400 ms (windows scroll
     and move). Wide elements (a list row, the omnibox) only snap the short
     axis; along the long axis the cursor follows the gaze inside the element.
   * Because of the jump-mode dead zone, Talon may not move the cursor onto a
@@ -187,6 +188,11 @@ def _filter(f, x, y):
     _st.latest = (now, x, y, centroid)
 
     held = _st.held
+    if held is not None and not held.contains(x, y, max(3.0 * _cfg["release_px"], 120.0)):
+        # clearly gone (a saccade away): let go NOW on the tracker thread rather than
+        # feeding Talon the old snap point for another worker tick + release_ms
+        _release("gaze far")
+        held = None
     l, r_ = f.left, f.right
     both = l.detected and r_.detected
     if held is None:

@@ -70,6 +70,11 @@ settings():
     # extra low-pass on the corrected gaze before Talon sees it (ms).
     # Steadier for small targets -> raise (150); laggy -> lower; 0 = off.
     user.gaze_smoothing_ms = 90.0
+    # a sample further than this (px) from the smoothed point is a real eye
+    # movement: the low-pass restarts there instead of curving toward it (big
+    # saccades arrive at once). Jumps land late / in two hops -> lower (40);
+    # cursor twitches on plain noise -> raise (80). 0 = always smooth.
+    user.gaze_smoothing_jump_px = 60
 
     # ---- target magnet (target_magnet.py, ctrl-alt-t) ----
     # Snaps the cursor onto the button / tab / link / list row you are looking

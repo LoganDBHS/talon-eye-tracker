@@ -112,6 +112,7 @@ Edit `head_tracking_settings.talon`, save; values apply within 250 ms.
 | Cursor drifts over minutes (slouching) | glance at the middle of the screen for a few seconds (neutral re-learns there); lower `user.head_neutral_seconds` to make that faster; ctrl-alt-r forces it |
 | Cursor sits pushed after I sit back down | ctrl-alt-r (or wait: `user.head_lost_recenter_seconds` re-anchors after you were away ≥ 5 s) |
 | Cursor lags the head | lower `user.head_smoothing_ms` (80 → 40) |
+| Big eye movements land late or in two hops | lower `user.gaze_smoothing_jump_px` (60 → 40) so saccades bypass the gaze low-pass sooner; if the cursor then twitches on noise, raise it (80) |
 | Anything goes wild | ctrl-alt-h turns the head part off (correction stays); `user.head_max_offset_mm` clamps the push (400) |
 | Gaze itself stops short of / overshoots an edge (head still) | run ctrl-alt-m and paste its `SUGGEST` lines: per-side `user.gaze_gain_left/right/up/down`, `user.gaze_curve_*` (only where it says non-linear) and `user.gaze_map_rotation_deg`. Its `residual` line shows the error left with the current values |
 | Edges stop short when I lean in / overshoot when I sit back | `user.gaze_ref_distance_mm` must be the distance the gains were measured at (ctrl-alt-m Apply writes it; ctrl-alt-d prints `dist_mm` live). 0 turns the rescaling off |

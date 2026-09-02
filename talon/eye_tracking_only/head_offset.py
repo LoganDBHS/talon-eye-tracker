@@ -146,6 +146,9 @@ _SETTINGS = {
     "gsmooth_ms": ("gaze_smoothing_ms", 90.0,
                    "Extra low-pass (time constant, ms) on the corrected gaze before Talon sees it. "
                    "Higher = steadier cursor for small targets but laggier; 0 = off. Try 60-150."),
+    "gjump_px": ("gaze_smoothing_jump_px", 60.0,
+                 "A gaze sample further than this (px) from the smoothed point is a real eye movement, not "
+                 "jitter: the low-pass restarts there instead of dragging the cursor along a curve. 0 = always smooth."),
     "snap_px": ("gaze_edge_snap_px", 30.0,
                 "Edge magnet: a corrected gaze point within this many px of a screen edge is snapped onto the "
                 "edge (menu bars, scrollbars, corners). 0 = off."),
@@ -173,7 +176,8 @@ def _refresh_settings():
     c = _cfg
     _identity[0] = (c["k_left"] == 1.0 and c["k_right"] == 1.0 and c["k_up"] == 1.0 and c["k_down"] == 1.0
                     and c["q_left"] == 0.0 and c["q_right"] == 0.0 and c["q_up"] == 0.0 and c["q_down"] == 0.0
-                    and c["rot"] == 0.0 and c["snap_px"] == 0.0 and c["gsmooth_ms"] == 0.0)
+                    and c["rot"] == 0.0 and c["snap_px"] == 0.0 and c["gsmooth_ms"] == 0.0
+                    and c["ref_dist"] == 0.0)
     # also runs every 250 ms: drop a stale offset once the eyes have been gone
     st = _st
     if st.last_seen and (st.offset_px != (0.0, 0.0) or st.credit != (0.0, 0.0)) \
@@ -376,6 +380,12 @@ def _smooth(key, p, ts):
     if prev is not None:
         prev_ts, prev_p = prev
         gap = ts - prev_ts
+        jump = _cfg["gjump_px"]
+        if jump > 0:
+            r = _geo.rect
+            if math.hypot((p.x - prev_p.x) * r.width, (p.y - prev_p.y) * r.height) > jump:
+                _sm[key] = (ts, p)      # saccade: pass it through at once, smooth from here
+                return p
         if 0 < gap <= 0.3:
             a = gap / (tau + gap)
             p = Point2d(prev_p.x + a * (p.x - prev_p.x), prev_p.y + a * (p.y - prev_p.y))
