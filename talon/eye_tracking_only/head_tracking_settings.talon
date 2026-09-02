@@ -101,8 +101,8 @@ settings():
     # if it is not on the target after place_ms. 0 = never touch the cursor.
     user.magnet_place_cursor = 1
     user.magnet_place_ms = 120
-    # thin outline around the held element
-    user.magnet_highlight = 1
+    # thin outline around the held element (user preferred none, 2026-09-02)
+    user.magnet_highlight = 0
     # 1 = log every grab / release / placement to talon.log ([magnet] lines)
     user.magnet_debug = 0
 
