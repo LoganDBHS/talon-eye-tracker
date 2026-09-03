@@ -110,6 +110,11 @@ settings():
     # of the settled point. Lands in the gap when you meant the button next
     # to it -> raise (32); cannot reach narrow gaps between buttons -> lower (16).
     user.magnet_gap_clear_px = 24
+    # while empty space is held, a neighbouring button only takes over once the
+    # gaze is this far inside it. Buttons next to a gap keep stealing it -> raise
+    # (24); hard to get from the gap onto the button -> lower (8).
+    user.magnet_gap_stick_px = 16
+
 
     # Talon's control mouse runs in jump mode (45 mm dead zone): it will not
     # move the cursor 20 px on its own, so the magnet places the cursor itself

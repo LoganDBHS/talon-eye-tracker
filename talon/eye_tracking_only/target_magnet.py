@@ -44,7 +44,11 @@ HOW
     centre line and you can double-click there to maximise the window. Space
     that is wide AND tall (a page body, the desktop) is not a target - the
     gaze is precise enough there and the head stays free. Buttons keep
-    priority: within magnet_gap_clear_px of one, the reach ring below wins.
+    priority for the FIRST grab: within magnet_gap_clear_px of one, the reach
+    ring below wins. A HELD gap is sticky the other way: a neighbouring
+    button only takes over once the settled gaze is `magnet_gap_stick_px`
+    inside it (first test 2026-09-03: gaze noise a few px into the toolbar
+    under the tab strip kept stealing the gap).
   * Sticky: the target is kept while the gaze stays inside its rectangle plus
     `magnet_release_px` (a gaze further than 3x that / 120 px releases on the
     very next frame, so a saccade away is never delayed); a settled gaze on a
@@ -116,6 +120,9 @@ _SETTINGS = {
     "gap_clear_px": ("magnet_gap_clear_px", 24.0,
                      "Empty space only wins when no clickable element is within this many px of the settled "
                      "point (closer = the button is meant, the reach ring grabs it)."),
+    "gap_stick_px": ("magnet_gap_stick_px", 16.0,
+                     "While empty space is held, a neighbouring button only takes over once the settled gaze "
+                     "is this far inside it (px; capped at a third of the button's side)."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
     "debug": ("magnet_debug", 0.0, "1 = log every grab / release / cursor placement to talon.log."),
 }
@@ -406,12 +413,12 @@ def _measure_gap(cx, cy, hit):
         r0 = hit.rect
     except Exception:
         return None
-    # [dx, dy, extent, done]; extent = free px in that direction
-    arms = [[-1, 0, 0.0, False], [1, 0, 0.0, False], [0, -1, 0.0, False], [0, 1, 0.0, False]]
+    # [dx, dy, extent, done, ender]; extent = free px in that direction
+    arms = [[-1, 0, 0.0, False, ""], [1, 0, 0.0, False, ""], [0, -1, 0.0, False, ""], [0, 1, 0.0, False, ""]]
     edge = {0: cx - scr.x, 1: scr.x + scr.width - 1 - cx, 2: cy - scr.y, 3: scr.y + scr.height - 1 - cy}
     for i, a in enumerate(arms):
         if edge[i] <= 0:
-            a[2], a[3] = 0.0, True
+            a[2], a[3], a[4] = 0.0, True, "edge"
     d, k = 0.0, 0
     while any(not a[3] for a in arms):
         d = _GAP_STEPS[k] if k < len(_GAP_STEPS) else d + 20.0
@@ -420,10 +427,10 @@ def _measure_gap(cx, cy, hit):
             if a[3]:
                 continue
             if d > edge[i]:
-                a[2], a[3] = edge[i], True
+                a[2], a[3], a[4] = edge[i], True, "edge"
                 continue
             if d > cap:
-                a[2], a[3] = cap + 1, True     # long side: the exact length no longer matters
+                a[2], a[3], a[4] = cap + 1, True, "long"     # long side: exact length does not matter
                 continue
             e = _elem(cx + a[0] * d, cy + a[1] * d)
             if _wall(e):
@@ -431,7 +438,7 @@ def _measure_gap(cx, cy, hit):
                     a[2] = _rect_dist(e.rect, cx, cy)
                 except Exception:
                     a[2] = d
-                a[3] = True
+                a[3], a[4] = True, "wall " + _brief(e)
                 if a[2] < clear:
                     return None            # a button is meant: let the reach ring have it
             elif _foreign(e, r0) or _content(e):
@@ -439,7 +446,7 @@ def _measure_gap(cx, cy, hit):
                     a[2] = _rect_dist(e.rect, cx, cy)
                 except Exception:
                     a[2] = d
-                a[3] = True
+                a[3], a[4] = True, "other " + _brief(e)
             else:
                 a[2] = d
         w = arms[0][2] + arms[1][2]
@@ -459,7 +466,26 @@ def _measure_gap(cx, cy, hit):
         name, ctype = (hit.name or ""), (hit.control_type or "")
     except Exception:
         name, ctype = "", ""
-    return (r, "gap", name, ctype)
+    t = (r, "gap", name, ctype)
+    if _cfg["debug"]:
+        print(f"[magnet] gap from ({cx:.0f},{cy:.0f}) on {_brief(hit)}: "
+              + ", ".join(f"{n} {a[2]:.0f} ({a[4]})" for n, a in zip(("left", "right", "up", "down"), arms)))
+    # the point the cursor would be put on must itself be empty (a rectangle that
+    # overlaps a button was seen once on 2026-09-03; the enders above will say why)
+    sx, sy = _Target(*t).snap(cx, cy)
+    if _wall(_elem(sx, sy)):
+        if _cfg["debug"]:
+            print(f"[magnet] gap rejected: snap point ({sx:.0f},{sy:.0f}) is on a clickable element")
+        return None
+    return t
+
+
+def _brief(e):
+    try:
+        r = e.rect
+        return f"{e.control_type}:{(e.name or '')[:14]!r}@({r.x:.0f},{r.y:.0f} {r.width:.0f}x{r.height:.0f})"
+    except Exception:
+        return repr(e)[:30]
 
 
 def _lookup(cx, cy):
@@ -494,6 +520,13 @@ def _lookup(cx, cy):
                 if d <= reach and d < best_d:
                     best, best_d = t, d
     return best or hit
+
+
+def _well_inside(r, p):
+    """Is point p at least magnet_gap_stick_px (capped at a third of the side) inside r?"""
+    ix = min(_cfg["gap_stick_px"], r.width / 3.0)
+    iy = min(_cfg["gap_stick_px"], r.height / 3.0)
+    return r.x + ix <= p[0] <= r.x + r.width - ix and r.y + iy <= p[1] <= r.y + r.height - iy
 
 
 def _same_line(held, r):
@@ -575,6 +608,11 @@ class _Worker:
                 t = self.lookup(centroid, now)
                 if t is not None and held.same_rect(t[0]):
                     self.miss = (now, centroid[0], centroid[1])   # still ours: do not re-probe every tick
+                if t is not None and t[1] == "click" and held.kind == "gap" and not _well_inside(t[0], centroid):
+                    # gaze noise nibbling at a neighbouring button: the gap stays held
+                    # (the normal release still applies once the gaze is release_px outside)
+                    self.miss = (now, centroid[0], centroid[1])
+                    t = None
                 if t is not None and t[1] in ("click", "gap") and not held.same_rect(t[0]):
                     if t[1] == "gap" and held.kind == "gap" and _same_line(held, t[0]):
                         held.x, held.y, held.w, held.h = t[0].x, t[0].y, t[0].width, t[0].height
