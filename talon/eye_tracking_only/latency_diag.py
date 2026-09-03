@@ -14,6 +14,7 @@ frame reached Talon's user code (tracker + USB + Talon pipeline). What is left
 in this folder.
 """
 import statistics
+import sys
 import time
 
 from talon import Module, actions, app, cron, ctrl, tracking_system, ui
@@ -71,10 +72,19 @@ def _on_gaze(frame):
             except Exception:
                 c = s.rest_px
             s.pending = {"t0": now, "frame_ts": frame.ts, "start_cursor": c, "from": s.rest_px,
-                         "dist": d, "moved": None, "arrived": None}
+                         "dist": d, "moved": None, "arrived": None, "moved_at": None,
+                         "placements0": _magnet_placements()}
         else:
             s.rest_px = (s.rest_px[0] + 0.2 * dx, s.rest_px[1] + 0.2 * dy)
     s.last_px = p
+
+
+def _magnet_placements():
+    m = sys.modules.get("user.eye_tracking_only.target_magnet")
+    try:
+        return m._st.placements if m else 0
+    except Exception:
+        return 0
 
 
 def _poll():
@@ -92,6 +102,7 @@ def _poll():
     frac = gone / max(ev["dist"], 1.0)
     if ev["moved"] is None and frac >= 0.3:
         ev["moved"] = now
+        ev["moved_at"] = (cx, cy)
     if s.last_px is not None:
         gx, gy = s.last_px
         near = ((cx - gx) ** 2 + (cy - gy) ** 2) ** 0.5 <= ARRIVE_PX
@@ -104,7 +115,13 @@ def _poll():
     m = f"{(ev['moved'] - ev['t0']) * 1000:+.0f} ms" if ev["moved"] else "never"
     a = f"{(ev['arrived'] - ev['t0']) * 1000:+.0f} ms" if ev["arrived"] else f"not within {TIMEOUT_S:.1f} s"
     lag = f"{lag_ms:.0f} ms" if lag_ms is not None else "n/a (different clock)"
-    print(f"[latency] saccade {ev['dist']:.0f} px: moved {m}, arrived {a} (frame lag {lag})")
+    extra = ""
+    if ev["moved_at"] is not None and s.last_px is not None:
+        # how far the FIRST hop landed from where the gaze ended up, and who finished the job
+        short = ((ev["moved_at"][0] - s.last_px[0]) ** 2 + (ev["moved_at"][1] - s.last_px[1]) ** 2) ** 0.5
+        placed = _magnet_placements() - ev["placements0"]
+        extra = f"; first hop {short:.0f} px short of the gaze, magnet placements {placed}"
+    print(f"[latency] saccade {ev['dist']:.0f} px: moved {m}, arrived {a} (frame lag {lag}){extra}")
     if ev["moved"] and ev["arrived"]:
         s.results.append(((ev["moved"] - ev["t0"]) * 1000, (ev["arrived"] - ev["t0"]) * 1000, lag_ms or 0.0))
         if len(s.results) % 10 == 0:
