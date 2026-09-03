@@ -32,8 +32,9 @@ HOW
   * Gap targets (2026-09-03): empty space is a target too. When the settled
     point is on a container (a window pane, toolbar, title bar - not a button,
     not text) and no clickable element is within `magnet_gap_clear_px`, the
-    thread walks a cross from the point (10 px steps, 20 px beyond 30) until
-    each arm hits a clickable element, a different element that is neither
+    thread walks a cross from the point (10 px steps, 20 px beyond 30; the
+    long axis is walked along the strip's centre line) until each arm hits a
+    clickable element, a different element that is neither
     the container's parent nor its child (a title bar ends where the document
     below it begins), a big text/document/image area (content, even when it
     is a child of the container), the screen edge, or `magnet_axis_snap_px`. The free
@@ -396,14 +397,68 @@ def _content(e):
         return False
 
 
+def _walk(dx, dy, px, py, gx, gy, r0, clear, cap, scr):
+    """Two arms (-/+) along one axis from (px, py). Returns [[.., .., extent, done, ender] x 2]
+    or None when a clickable element is within `clear` px of the GAZE point (gx, gy) - then
+    the button is meant. Extents are measured from the walk point; a side is 'long' at
+    cap + 1, and the walk stops once both extents together exceed cap."""
+    if dx:
+        edges = (px - scr.x, scr.x + scr.width - 1 - px)
+    else:
+        edges = (py - scr.y, scr.y + scr.height - 1 - py)
+    arms = [[-dx, -dy, 0.0, False, ""], [dx, dy, 0.0, False, ""]]
+    for i, a in enumerate(arms):
+        if edges[i] <= 0:
+            a[2], a[3], a[4] = 0.0, True, "edge"
+    d, k = 0.0, 0
+    while not (arms[0][3] and arms[1][3]):
+        d = _GAP_STEPS[k] if k < len(_GAP_STEPS) else d + 20.0
+        k += 1
+        for i, a in enumerate(arms):
+            if a[3]:
+                continue
+            if d > edges[i]:
+                a[2], a[3], a[4] = edges[i], True, "edge"
+                continue
+            if d > cap:
+                a[2], a[3], a[4] = cap + 1, True, "long"     # long side: exact length does not matter
+                continue
+            e = _elem(px + a[0] * d, py + a[1] * d)
+            if _wall(e):
+                try:
+                    r = e.rect
+                    a[2], near = _rect_dist(r, px, py), _rect_dist(r, gx, gy)
+                except Exception:
+                    a[2] = near = d
+                a[3], a[4] = True, "wall " + _brief(e)
+                if near < clear:
+                    return None            # a button is meant: let the reach ring have it
+            elif _foreign(e, r0) or _content(e):
+                try:
+                    a[2] = _rect_dist(e.rect, px, py)
+                except Exception:
+                    a[2] = d
+                a[3], a[4] = True, "other " + _brief(e)
+            else:
+                a[2] = d
+        if arms[0][2] + arms[1][2] > cap:
+            for a in arms:
+                if not a[3]:
+                    a[2], a[3], a[4] = cap + 1, True, "long"
+    return arms
+
+
 def _measure_gap(cx, cy, hit):
     """Free space around the settled point (cx, cy), whose direct hit `hit` is a container.
-    Walks the four axis directions in lockstep (10 px steps): each arm ends at the first
-    clickable element (exact distance from its rectangle), the screen edge, or the axis
-    snap length (then that side is 'long'). Returns a target tuple (Rect, 'gap', name,
-    ctype) when the space is clear of buttons and at least one side is short enough to
-    snap to, else None. Worst case ~4 x 12 probes, but a button within gap_clear_px
-    aborts after the first steps and a wide-and-tall space after both axes go long."""
+    Walks the vertical arms from the point first; if that gives a strip (height <= the
+    axis snap length) the horizontal arms are walked ALONG ITS CENTRE LINE - at the gaze
+    height near a strip's edge Chrome does not report its buttons (the New Tab button
+    was walked through at y=59 although its rectangle reaches y=72, seen 2026-09-03).
+    A tall space is walked horizontally at the point and, if narrow, vertically again
+    along the vertical centre line. Returns (Rect, 'gap', name, ctype) or None: a
+    clickable element within gap_clear_px of the point, both sides longer than the snap
+    length, a side thinner than 20 px (border, seam) or a snap point on a clickable
+    element all mean no target."""
     clear = _cfg["gap_clear_px"]
     cap = _cfg["axis_px"]
     scr = head_offset.screen_rect()
@@ -413,55 +468,38 @@ def _measure_gap(cx, cy, hit):
         r0 = hit.rect
     except Exception:
         return None
-    # [dx, dy, extent, done, ender]; extent = free px in that direction
-    arms = [[-1, 0, 0.0, False, ""], [1, 0, 0.0, False, ""], [0, -1, 0.0, False, ""], [0, 1, 0.0, False, ""]]
-    edge = {0: cx - scr.x, 1: scr.x + scr.width - 1 - cx, 2: cy - scr.y, 3: scr.y + scr.height - 1 - cy}
-    for i, a in enumerate(arms):
-        if edge[i] <= 0:
-            a[2], a[3], a[4] = 0.0, True, "edge"
-    d, k = 0.0, 0
-    while any(not a[3] for a in arms):
-        d = _GAP_STEPS[k] if k < len(_GAP_STEPS) else d + 20.0
-        k += 1
-        for i, a in enumerate(arms):
-            if a[3]:
-                continue
-            if d > edge[i]:
-                a[2], a[3], a[4] = edge[i], True, "edge"
-                continue
-            if d > cap:
-                a[2], a[3], a[4] = cap + 1, True, "long"     # long side: exact length does not matter
-                continue
-            e = _elem(cx + a[0] * d, cy + a[1] * d)
-            if _wall(e):
-                try:
-                    a[2] = _rect_dist(e.rect, cx, cy)
-                except Exception:
-                    a[2] = d
-                a[3], a[4] = True, "wall " + _brief(e)
-                if a[2] < clear:
-                    return None            # a button is meant: let the reach ring have it
-            elif _foreign(e, r0) or _content(e):
-                try:
-                    a[2] = _rect_dist(e.rect, cx, cy)
-                except Exception:
-                    a[2] = d
-                a[3], a[4] = True, "other " + _brief(e)
-            else:
-                a[2] = d
-        w = arms[0][2] + arms[1][2]
-        h = arms[2][2] + arms[3][2]
-        # both axes already longer than the snap length -> not a target, stop probing
-        if w > cap and h > cap:
-            return None
-        # a finished axis thinner than 20 px (a window border, a seam): not worth holding
-        if (arms[0][3] and arms[1][3] and w < 20.0) or (arms[2][3] and arms[3][3] and h < 20.0):
-            return None
-    w = arms[0][2] + arms[1][2]
-    h = arms[2][2] + arms[3][2]
-    if w > cap and h > cap:
+    v = _walk(0, 1, cx, cy, cx, cy, r0, clear, cap, scr)
+    if v is None:
         return None
-    r = Rect(cx - arms[0][2], cy - arms[2][2], w, h)
+    h = v[0][2] + v[1][2]
+    if h < 20.0:
+        return None
+    if h <= cap:
+        cyl = cy - v[0][2] + h / 2.0
+        hz = _walk(1, 0, cx, cyl, cx, cy, r0, clear, cap, scr)
+        if hz is None:
+            return None
+        w = hz[0][2] + hz[1][2]
+        if w < 20.0:
+            return None
+        r = Rect(cx - hz[0][2], cy - v[0][2], w, h)
+        walks = (("left", hz[0]), ("right", hz[1]), ("up", v[0]), ("down", v[1]))
+    else:
+        hz = _walk(1, 0, cx, cy, cx, cy, r0, clear, cap, scr)
+        if hz is None:
+            return None
+        w = hz[0][2] + hz[1][2]
+        if w > cap or w < 20.0:
+            return None
+        cxl = cx - hz[0][2] + w / 2.0
+        v2 = _walk(0, 1, cxl, cy, cx, cy, r0, clear, cap, scr)
+        if v2 is None:
+            return None
+        h = v2[0][2] + v2[1][2]
+        if h < 20.0:
+            return None
+        r = Rect(cx - hz[0][2], cy - v2[0][2], w, h)
+        walks = (("left", hz[0]), ("right", hz[1]), ("up", v2[0]), ("down", v2[1]))
     try:
         name, ctype = (hit.name or ""), (hit.control_type or "")
     except Exception:
@@ -469,9 +507,8 @@ def _measure_gap(cx, cy, hit):
     t = (r, "gap", name, ctype)
     if _cfg["debug"]:
         print(f"[magnet] gap from ({cx:.0f},{cy:.0f}) on {_brief(hit)}: "
-              + ", ".join(f"{n} {a[2]:.0f} ({a[4]})" for n, a in zip(("left", "right", "up", "down"), arms)))
-    # the point the cursor would be put on must itself be empty (a rectangle that
-    # overlaps a button was seen once on 2026-09-03; the enders above will say why)
+              + ", ".join(f"{n} {a[2]:.0f} ({a[4]})" for n, a in walks))
+    # the point the cursor would be put on must itself be empty
     sx, sy = _Target(*t).snap(cx, cy)
     if _wall(_elem(sx, sy)):
         if _cfg["debug"]:
