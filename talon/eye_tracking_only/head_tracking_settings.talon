@@ -114,6 +114,11 @@ settings():
     # gaze is this far inside it. Buttons next to a gap keep stealing it -> raise
     # (24); hard to get from the gap onto the button -> lower (8).
     user.magnet_gap_stick_px = 16
+    # while a button is held, another button only takes over once the gaze is
+    # this far inside it (stops flicker on the seam between two buttons).
+    # Switching along a tab strip feels slow -> lower (4) or 0; still flickers -> raise (12).
+    user.magnet_switch_inset_px = 8
+
 
 
     # Talon's control mouse runs in jump mode (45 mm dead zone): it will not

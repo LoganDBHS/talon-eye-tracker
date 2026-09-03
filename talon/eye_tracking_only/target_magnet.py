@@ -50,6 +50,10 @@ HOW
     button only takes over once the settled gaze is `magnet_gap_stick_px`
     inside it (first test 2026-09-03: gaze noise a few px into the toolbar
     under the tab strip kept stealing the gap).
+  * Seams: a held button hands over to a neighbouring button only once the
+    settled gaze is `magnet_switch_inset_px` inside it (the gaze parked on
+    the seam between the New Tab button and the toolbar flickered between
+    them ten times in seven seconds, recorded 2026-09-03).
   * Sticky: the target is kept while the gaze stays inside its rectangle plus
     `magnet_release_px` (a gaze further than 3x that / 120 px releases on the
     very next frame, so a saccade away is never delayed); a settled gaze on a
@@ -124,6 +128,10 @@ _SETTINGS = {
     "gap_stick_px": ("magnet_gap_stick_px", 16.0,
                      "While empty space is held, a neighbouring button only takes over once the settled gaze "
                      "is this far inside it (px; capped at a third of the button's side)."),
+    "switch_inset_px": ("magnet_switch_inset_px", 8.0,
+                        "While a button is held, another button only takes over once the settled gaze is this "
+                        "far inside it (px; capped at a third of its side). 0 = switch as soon as the gaze "
+                        "touches it (flickers on the seam between two buttons)."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
     "debug": ("magnet_debug", 0.0, "1 = log every grab / release / cursor placement to talon.log."),
 }
@@ -559,10 +567,10 @@ def _lookup(cx, cy):
     return best or hit
 
 
-def _well_inside(r, p):
-    """Is point p at least magnet_gap_stick_px (capped at a third of the side) inside r?"""
-    ix = min(_cfg["gap_stick_px"], r.width / 3.0)
-    iy = min(_cfg["gap_stick_px"], r.height / 3.0)
+def _well_inside(r, p, inset):
+    """Is point p at least `inset` px (capped at a third of the side) inside r?"""
+    ix = min(inset, r.width / 3.0)
+    iy = min(inset, r.height / 3.0)
     return r.x + ix <= p[0] <= r.x + r.width - ix and r.y + iy <= p[1] <= r.y + r.height - iy
 
 
@@ -645,11 +653,13 @@ class _Worker:
                 t = self.lookup(centroid, now)
                 if t is not None and held.same_rect(t[0]):
                     self.miss = (now, centroid[0], centroid[1])   # still ours: do not re-probe every tick
-                if t is not None and t[1] == "click" and held.kind == "gap" and not _well_inside(t[0], centroid):
-                    # gaze noise nibbling at a neighbouring button: the gap stays held
-                    # (the normal release still applies once the gaze is release_px outside)
-                    self.miss = (now, centroid[0], centroid[1])
-                    t = None
+                if t is not None and t[1] == "click" and not held.same_rect(t[0]):
+                    inset = _cfg["gap_stick_px"] if held.kind == "gap" else _cfg["switch_inset_px"]
+                    if not _well_inside(t[0], centroid, inset):
+                        # gaze noise nibbling at a neighbouring button: the held target stays
+                        # (the normal release still applies once the gaze is release_px outside)
+                        self.miss = (now, centroid[0], centroid[1])
+                        t = None
                 if t is not None and t[1] in ("click", "gap") and not held.same_rect(t[0]):
                     if t[1] == "gap" and held.kind == "gap" and _same_line(held, t[0]):
                         held.x, held.y, held.w, held.h = t[0].x, t[0].y, t[0].width, t[0].height
