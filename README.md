@@ -21,6 +21,7 @@ Also required: [talonhub/community](https://github.com/talonhub/community) clone
 | `Ctrl+Alt+Z` | toggle zoom mouse |
 | `Ctrl+Alt+C` | run Talon's calibration; press again mid-run to cancel it. A banner reports how the run ended (saved / cancelled / failed and why) |
 | `Ctrl+Alt+Shift+C` | swap to the previous saved calibration (every saved run is copied to `%APPDATA%\talon\calib_backups\`); handy for glasses on / off |
+| `Ctrl+Alt+Shift+D` | 4 s tracking health check: both eyes seen, distance, jitter (run this first when pointing suddenly feels worse) |
 | `F4` | open zoom overlay at gaze point |
 | `Shift+F4` / `Esc` | cancel zoom |
 | left / right click (while zoomed) | commit left / right click at the gazed target |
@@ -42,6 +43,9 @@ Clicks are synthesized with a raw `SendInput` batch (absolute move + down + up i
 - Talon runs elevated: killing it needs an elevated shell, and a plain `Stop-Process` fails *silently*.
 - Never edit `community` files — override settings from your own folder with a more specific context (see `eye_tracking_settings.talon`).
 - The double flag must be deleted **synchronously** before sending a synthetic click, or the bridge swallows Talon's own click.
+- **Glasses**: on 2026-09-03 the left lens reflected the tracker's IR and the left eye was seen in 0 of 133 frames. One-eyed tracking is jumpy (90th-percentile frame jump ~90 px) and every symptom downstream looked like a magnet or calibration fault. Check `Ctrl+Alt+Shift+D` before touching anything else. Anti-reflective lenses or blocking the light on that side are the real fix.
+- **Do not Apply ctrl-alt-m blindly.** Its SUGGEST values scatter from run to run (up gain 0.60 to 0.91 across eight runs) and it measures with the head still; in use you tilt your head for the top rows and the raw gaze lands lower than the still-head fit predicts. On 2026-09-03 three Applies weakened `gaze_gain_up`/`gaze_curve_up` from the approved 0.77/0.38 to 0.82/0.24 and the top tabs became unreachable. Compare against the approved values (see `notes/calibration-and-gain-history.md`) before applying.
+- Talon overwrites `calib.bin` on every saved calibration; the guard now keeps dated copies in `%APPDATA%\talon\calib_backups\` and `Ctrl+Alt+Shift+C` swaps to the previous one.
 
 ## Known issue (open)
 

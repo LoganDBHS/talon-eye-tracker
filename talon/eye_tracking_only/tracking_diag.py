@@ -29,7 +29,7 @@ import math
 import os
 import time
 
-from talon import Module, app, cron, tracking_system, ui
+from talon import Module, actions, app, cron, tracking_system, ui
 from talon.scripting import rctx
 from talon_init import TALON_HOME
 
@@ -200,6 +200,54 @@ def enabled():
     return _jobs["log"] is not None
 
 
+# --- 4 s health check (ctrl-alt-shift-d): are both eyes seen, how far, how jittery ---
+# Added 2026-09-03 after glasses cost the left eye (0 of 133 frames) and every
+# symptom downstream looked like a magnet or calibration fault.
+_health = {"frames": []}
+
+
+def _health_on_gaze(frame):
+    _health["frames"].append(frame)
+
+
+def _health_report():
+    try:
+        tracking_system.unregister("gaze", _health_on_gaze)
+    except Exception:
+        pass
+    fr = _health["frames"]
+    n = len(fr)
+    if n == 0:
+        msg = "Tracking health: NO frames in 4 s (tracker attached? Tobii services stopped?)"
+        print(f"[trackdiag] {msg}")
+        actions.user.banner(msg, "warn")
+        return
+    both = sum(1 for f in fr if f.left.detected and f.right.detected)
+    left = sum(1 for f in fr if f.left.detected)
+    right = sum(1 for f in fr if f.right.detected)
+    zs = [f.left.pos.z for f in fr if f.left.detected] + [f.right.pos.z for f in fr if f.right.detected]
+    dist = sum(zs) / len(zs) if zs else 0.0
+    r = ui.main_screen().rect
+    pts = [(f.gaze.x * r.width, f.gaze.y * r.height) for f in fr if f.gaze is not None and (f.left.detected or f.right.detected)]
+    jumps = sorted(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
+    p50 = jumps[len(jumps) // 2] if jumps else 0.0
+    big = sum(1 for j in jumps if j > 120)
+    kind = "on" if both >= 0.9 * n else ("warn" if max(left, right) >= 0.9 * n else "off")
+    verdict = {"on": "OK", "warn": "ONE EYE ONLY (glasses reflection? lighting?)", "off": "EYES NOT SEEN"}[kind]
+    msg = (f"Tracking health: {verdict} - both eyes {100 * both // n}% (L {100 * left // n}%, R {100 * right // n}%), "
+           f"{dist:.0f} mm away, {n} frames/4 s, frame jump median {p50:.0f} px, {big} jumps > 120 px")
+    print(f"[trackdiag] {msg}")
+    actions.user.banner(msg, kind)
+
+
+def health_check():
+    _health["frames"] = []
+    with _ctx.enter():
+        tracking_system.register("gaze", _health_on_gaze)
+        cron.after("4s", _health_report)
+    actions.user.banner("Tracking health: sampling 4 s - look around normally", "info")
+
+
 @mod.action_class
 class Actions:
     def tracking_diag_toggle():
@@ -214,3 +262,7 @@ class Actions:
     def tracking_diag_enabled() -> bool:
         """Is the tracking diagnostic logger running?"""
         return enabled()
+
+    def tracking_health():
+        """4 s check: are both eyes seen, at what distance, how jittery - result in a banner and talon.log"""
+        health_check()

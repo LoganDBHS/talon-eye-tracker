@@ -15,7 +15,9 @@ way to each edge - and records where the RAW GAZE actually lands for each one
     the targets (tray > Eye Tracking > Only Left/Right Eye if one is much worse)
 
 KEEP YOUR HEAD STILL during the run (eyes only). Esc cancels. Results go to
-talon.log (prefix [gazemeasure]), %APPDATA%/Talon/gaze_measure_last.json, and
+talon.log (prefix [gazemeasure]), %APPDATA%/Talon/gaze_measure_last.json (plus a
+dated copy in gaze_measure_history/, where Apply also keeps the settings file it
+replaced - the SUGGEST values scatter run to run, keep the history), and
 stay on screen with two buttons: APPLY writes the SUGGEST values into
 head_tracking_settings.talon (Talon hot-reloads it; the previous file is saved
 to %APPDATA%/Talon/head_tracking_settings.backup) and DISCARD just closes.
@@ -45,6 +47,7 @@ _ctx = rctx.active()
 _OUT = os.path.join(TALON_HOME, "gaze_measure_last.json")
 _SETTINGS = os.path.join(os.path.dirname(__file__), "head_tracking_settings.talon")
 _BACKUP = os.path.join(TALON_HOME, "head_tracking_settings.backup")
+_HISTORY = os.path.join(TALON_HOME, "gaze_measure_history")   # dated copies of results + pre-Apply settings
 RESULTS_TIMEOUT_S = 180   # results page auto-closes (discards) after this
 DWELL_S = 0.6        # gaze must stay near the dot this long before sampling starts
 DWELL_RADIUS = 0.18  # "near" = within this fraction of the half-screen (~230 px)
@@ -342,6 +345,9 @@ def _compute_results():
         with open(_OUT, "w") as f:
             json.dump(out, f, indent=2)
         print(f"[gazemeasure] wrote {_OUT}")
+        os.makedirs(_HISTORY, exist_ok=True)
+        run.stamp = time.strftime("%Y%m%d-%H%M")
+        shutil.copyfile(_OUT, os.path.join(_HISTORY, f"measure-{run.stamp}.json"))
     except OSError as ex:
         print(f"[gazemeasure] could not write {_OUT}: {ex}")
     app.notify("Gaze measure", next((ln for ln in lines if ln.startswith("VERDICT")), "done - see talon.log"))
@@ -493,6 +499,12 @@ def apply_suggestions():
             text = text[:first.start()] + note + nl + text[first.start():]
     try:
         shutil.copyfile(_SETTINGS, _BACKUP)
+        try:   # dated copy too: the previous-file backup is overwritten by the next Apply
+            os.makedirs(_HISTORY, exist_ok=True)
+            shutil.copyfile(_SETTINGS, os.path.join(
+                _HISTORY, f"settings-before-apply-{getattr(run, 'stamp', None) or time.strftime('%Y%m%d-%H%M')}.talon"))
+        except OSError as ex:
+            print(f"[gazemeasure] history copy failed: {ex}")
         with open(_SETTINGS, "w", encoding="utf-8", newline="") as f:
             f.write(text)
     except OSError as ex:
