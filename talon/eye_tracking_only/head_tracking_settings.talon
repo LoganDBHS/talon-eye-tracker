@@ -118,6 +118,11 @@ settings():
     # this far inside it (stops flicker on the seam between two buttons).
     # Switching along a tab strip feels slow -> lower (4) or 0; still flickers -> raise (12).
     user.magnet_switch_inset_px = 8
+    # a switch to another button also needs the gaze to STAY on it this long
+    # (ms): gaze noise on the seam between neighbouring buttons is bigger than
+    # any inset. Flickers -> raise (250); switching feels sluggish -> lower (80).
+    user.magnet_switch_ms = 150
+
 
 
 
