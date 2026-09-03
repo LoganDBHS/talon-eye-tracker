@@ -29,6 +29,22 @@ HOW
     label (hit-tests just outside that child), and probes a ring of
     `magnet_reach_px` around the point when the hit is a container. The
     smallest clickable thing wins.
+  * Gap targets (2026-09-03): empty space is a target too. When the settled
+    point is on a container (a window pane, toolbar, title bar - not a button,
+    not text) and no clickable element is within `magnet_gap_clear_px`, the
+    thread walks a cross from the point (10 px steps, 20 px beyond 30) until
+    each arm hits a clickable element, a different element that is neither
+    the container's parent nor its child (a title bar ends where the document
+    below it begins), a big text/document/image area (content, even when it
+    is a child of the container), the screen edge, or `magnet_axis_snap_px`. The free
+    strip that gives is grabbed exactly like a button: a short side (<= axis
+    px) snaps the cursor to its centre line, a long side follows the gaze.
+    Chrome's empty tab-strip space right of the last button, for example,
+    measures ~80 px tall (tabs above the toolbar), so the cursor sits on its
+    centre line and you can double-click there to maximise the window. Space
+    that is wide AND tall (a page body, the desktop) is not a target - the
+    gaze is precise enough there and the head stays free. Buttons keep
+    priority: within magnet_gap_clear_px of one, the reach ring below wins.
   * Sticky: the target is kept while the gaze stays inside its rectangle plus
     `magnet_release_px` (a gaze further than 3x that / 120 px releases on the
     very next frame, so a saccade away is never delayed); a settled gaze on a
@@ -47,6 +63,10 @@ HOW
 
   Nothing happens while the control mouse is off (ctrl-alt-e), while the F4
   zoom overlay is open, or over Talon's own windows (ctrl-alt-m page).
+  Frames without a detected eye carry a (0, 0) gaze; they are ignored (seen
+  2026-09-03: the magnet was grabbing a window's system-menu button at the
+  top-left corner while nobody sat at the screen), and a held target is let
+  go after 0.4 s without eyes (a blink is shorter).
 
 LIVE TUNING: `user.magnet_*` in head_tracking_settings.talon. ctrl-alt-t toggles
 the magnet. `user.magnet_debug = 1` logs every grab / release / placement.
@@ -90,6 +110,12 @@ _SETTINGS = {
     "glide_ms": ("magnet_glide_ms", 0.0,
                  "Placement glides to the target with an ease-out over about this long (ms; shorter hops are "
                  "quicker, far jumps up to 1.6x longer). 0 = instant hop."),
+    "gap": ("magnet_gap_targets", 1.0,
+            "1 = empty space next to buttons (title bars, toolbar ends, taskbar) is a target too: a free "
+            "strip whose short side is <= magnet_axis_snap_px snaps the cursor to its centre line."),
+    "gap_clear_px": ("magnet_gap_clear_px", 24.0,
+                     "Empty space only wins when no clickable element is within this many px of the settled "
+                     "point (closer = the button is meant, the reach ring grabs it)."),
     "highlight": ("magnet_highlight", 1.0, "1 = draw a thin outline around the held element."),
     "debug": ("magnet_debug", 0.0, "1 = log every grab / release / cursor placement to talon.log."),
 }
@@ -110,6 +136,9 @@ _CLICK_PATTERNS = {"Invoke", "Toggle", "SelectionItem", "ExpandCollapse"}
 _PASSIVE_TYPES = {"Image", "Text", "Group", "Pane", "Custom"}
 _PASSIVE_MAX_PX = 130.0
 _IGNORED_PATTERNS = {"LegacyIAccessible", "ScrollItem", "TextChild"}
+_GAP_SKIP_TYPES = {"Text", "Image", "Edit", "Document"}   # a settled point on these never starts a gap
+_GAP_STEPS = (10.0, 20.0, 30.0)   # then 20 px steps (a button within gap_clear_px must be seen exactly)
+_EYES_LOST_S = 0.4                # no eye detected for this long -> let go of the target (blink < this)
 
 
 def _refresh_settings():
@@ -164,6 +193,7 @@ class _State:
     latest = None           # (ts, x, y, centroid_or_None) from the tracker thread
     frozen = None           # (Point3d left, Point3d right) eye positions while held
     thaw = None             # (release_perf_ts, frozen) - blend back to real positions
+    eyes_lost_ts = None     # perf ts since which no eye has been detected
     grabs = releases = placements = 0
     last_err = ""
 
@@ -176,6 +206,18 @@ _samples = deque()          # (perf_ts, x, y) corrected gaze, tracker thread onl
 def _filter(f, x, y):
     """Called by head_offset for every corrected frame (f is already a copy)."""
     now = time.perf_counter()
+    if not (f.left.detected or f.right.detected):
+        # no eyes: Talon still fills in a (0, 0) gaze - never settle on it
+        _samples.clear()
+        prev = _st.latest
+        if prev is not None:
+            _st.latest = (now, prev[1], prev[2], None)
+        if _st.eyes_lost_ts is None:
+            _st.eyes_lost_ts = now
+        elif _st.held is not None and now - _st.eyes_lost_ts > _EYES_LOST_S:
+            _release("eyes lost")
+        return False
+    _st.eyes_lost_ts = None
     _samples.append((now, x, y))
     win = _cfg["settle_ms"] / 1000.0
     while _samples and now - _samples[0][0] > max(win, 0.02) + 0.02:
@@ -295,11 +337,146 @@ def _rect_dist(r, px, py):
     return math.hypot(dx, dy)
 
 
+def _wall(e):
+    """Is element e something a gap must stop at? Any enabled clickable, whatever its size
+    (big clickables are not magnet targets but they are not empty space either), and
+    Talon's own windows."""
+    if e is None:
+        return False
+    try:
+        if e.pid == _SELF_PID:
+            return True
+        ctype = e.control_type or ""
+        pats = set(e.patterns or ()) - _IGNORED_PATTERNS
+        return (ctype in _CLICK_TYPES or bool(pats & _CLICK_PATTERNS)) and e.is_enabled
+    except Exception:
+        return False
+
+
+def _foreign(e, r0):
+    """Is e a different element that is neither an ancestor nor a descendant of the
+    container with rectangle r0 (by geometry - UIA elements here have no parent link)?
+    Such a neighbour (the document under a title bar, the window above the taskbar) ends
+    the free strip even though nothing there is clickable."""
+    if e is None:
+        return True
+    try:
+        r = e.rect
+    except Exception:
+        return False
+    if r is None:
+        return False
+    same = abs(r.x - r0.x) <= 1 and abs(r.y - r0.y) <= 1 and abs(r.width - r0.width) <= 1 \
+        and abs(r.height - r0.height) <= 1
+    if same:
+        return False
+    tol = 1.0
+    ancestor = (r.x <= r0.x + tol and r.y <= r0.y + tol
+                and r.x + r.width >= r0.x + r0.width - tol and r.y + r.height >= r0.y + r0.height - tol)
+    descendant = (r0.x <= r.x + tol and r0.y <= r.y + tol
+                  and r0.x + r0.width >= r.x + r.width - tol and r0.y + r0.height >= r.y + r.height - tol)
+    return not (ancestor or descendant)
+
+
+def _content(e):
+    """A big text / document / image area: content, not empty space - an arm walking from
+    a window border or a toolbar into it stops there even though it is a child of the
+    container it started on."""
+    try:
+        r = e.rect
+        return (e.control_type or "") in _GAP_SKIP_TYPES and r is not None             and min(r.width, r.height) > _PASSIVE_MAX_PX
+    except Exception:
+        return False
+
+
+def _measure_gap(cx, cy, hit):
+    """Free space around the settled point (cx, cy), whose direct hit `hit` is a container.
+    Walks the four axis directions in lockstep (10 px steps): each arm ends at the first
+    clickable element (exact distance from its rectangle), the screen edge, or the axis
+    snap length (then that side is 'long'). Returns a target tuple (Rect, 'gap', name,
+    ctype) when the space is clear of buttons and at least one side is short enough to
+    snap to, else None. Worst case ~4 x 12 probes, but a button within gap_clear_px
+    aborts after the first steps and a wide-and-tall space after both axes go long."""
+    clear = _cfg["gap_clear_px"]
+    cap = _cfg["axis_px"]
+    scr = head_offset.screen_rect()
+    if scr is None:
+        return None
+    try:
+        r0 = hit.rect
+    except Exception:
+        return None
+    # [dx, dy, extent, done]; extent = free px in that direction
+    arms = [[-1, 0, 0.0, False], [1, 0, 0.0, False], [0, -1, 0.0, False], [0, 1, 0.0, False]]
+    edge = {0: cx - scr.x, 1: scr.x + scr.width - 1 - cx, 2: cy - scr.y, 3: scr.y + scr.height - 1 - cy}
+    for i, a in enumerate(arms):
+        if edge[i] <= 0:
+            a[2], a[3] = 0.0, True
+    d, k = 0.0, 0
+    while any(not a[3] for a in arms):
+        d = _GAP_STEPS[k] if k < len(_GAP_STEPS) else d + 20.0
+        k += 1
+        for i, a in enumerate(arms):
+            if a[3]:
+                continue
+            if d > edge[i]:
+                a[2], a[3] = edge[i], True
+                continue
+            if d > cap:
+                a[2], a[3] = cap + 1, True     # long side: the exact length no longer matters
+                continue
+            e = _elem(cx + a[0] * d, cy + a[1] * d)
+            if _wall(e):
+                try:
+                    a[2] = _rect_dist(e.rect, cx, cy)
+                except Exception:
+                    a[2] = d
+                a[3] = True
+                if a[2] < clear:
+                    return None            # a button is meant: let the reach ring have it
+            elif _foreign(e, r0) or _content(e):
+                try:
+                    a[2] = _rect_dist(e.rect, cx, cy)
+                except Exception:
+                    a[2] = d
+                a[3] = True
+            else:
+                a[2] = d
+        w = arms[0][2] + arms[1][2]
+        h = arms[2][2] + arms[3][2]
+        # both axes already longer than the snap length -> not a target, stop probing
+        if w > cap and h > cap:
+            return None
+        # a finished axis thinner than 20 px (a window border, a seam): not worth holding
+        if (arms[0][3] and arms[1][3] and w < 20.0) or (arms[2][3] and arms[3][3] and h < 20.0):
+            return None
+    w = arms[0][2] + arms[1][2]
+    h = arms[2][2] + arms[3][2]
+    if w > cap and h > cap:
+        return None
+    r = Rect(cx - arms[0][2], cy - arms[2][2], w, h)
+    try:
+        name, ctype = (hit.name or ""), (hit.control_type or "")
+    except Exception:
+        name, ctype = "", ""
+    return (r, "gap", name, ctype)
+
+
 def _lookup(cx, cy):
     """Best target for a settled gaze point, or None."""
-    hit = _classify(_elem(cx, cy))
+    e = _elem(cx, cy)
+    hit = _classify(e)
     if hit and hit[1] == "click":
         return hit
+    if hit is None and _cfg["gap"] and e is not None:
+        try:
+            container = e.pid != _SELF_PID and (e.control_type or "") not in _GAP_SKIP_TYPES and not _wall(e)
+        except Exception:
+            container = False
+        if container:
+            g = _measure_gap(cx, cy, e)
+            if g is not None:
+                return g
     if hit:   # a small icon / label: the real control usually surrounds it
         r = hit[0]
         for px, py in ((r.x - 3, cy), (r.x + r.width + 3, cy), (cx, r.y - 3), (cx, r.y + r.height + 3)):
@@ -317,6 +494,18 @@ def _lookup(cx, cy):
                 if d <= reach and d < best_d:
                     best, best_d = t, d
     return best or hit
+
+
+def _same_line(held, r):
+    """Two gap rectangles that snap to the same centre line(s): just widen the held one
+    instead of re-grabbing (the cross measured from a new point gives a slightly different
+    rectangle every time the gaze wanders along a strip)."""
+    a = _cfg["axis_px"]
+    if held.h <= a and r.height <= a and abs((held.y + held.h / 2) - (r.y + r.height / 2)) <= 3:
+        return True
+    if held.w <= a and r.width <= a and abs((held.x + held.w / 2) - (r.x + r.width / 2)) <= 3:
+        return True
+    return False
 
 
 def _grab(t, why):
@@ -383,30 +572,53 @@ class _Worker:
                 return
             # settled on something else inside reach? switch
             if centroid is not None and not held.contains(*centroid):
-                t = _lookup(*centroid)
-                if t is not None and t[1] == "click" and not held.same_rect(t[0]):
-                    _grab(t, "switch")
-                    held = _st.held
+                t = self.lookup(centroid, now)
+                if t is not None and held.same_rect(t[0]):
+                    self.miss = (now, centroid[0], centroid[1])   # still ours: do not re-probe every tick
+                if t is not None and t[1] in ("click", "gap") and not held.same_rect(t[0]):
+                    if t[1] == "gap" and held.kind == "gap" and _same_line(held, t[0]):
+                        held.x, held.y, held.w, held.h = t[0].x, t[0].y, t[0].width, t[0].height
+                    else:
+                        _grab(t, "switch")
+                        held = _st.held
             # the element may have moved / scrolled away
             if now - self.checked_ts > _REVALIDATE_S:
                 self.checked_ts = now
                 sx, sy = held.snap(gx, gy)
-                t = _classify(_elem(sx, sy))
-                if t is None or not held.same_rect(t[0]):
+                e = _elem(sx, sy)
+                t = _classify(e)
+                if held.kind == "gap":
+                    # the space must still be empty; something clickable there (a menu
+                    # opened, a window moved in) is grabbed instead
+                    if t is not None and t[1] == "click":
+                        _grab(t, "gap filled")
+                        held = _st.held
+                    elif t is not None or _wall(e):
+                        _release("gap filled")
+                        return
+                elif t is None or not held.same_rect(t[0]):
                     _release("element changed")
                     return
             self.place(held, gx, gy, now)
             return
         if centroid is None:
             return
+        t = self.lookup(centroid, now)
+        if t is None:
+            return
+        _grab(t, "settled")
+
+    def lookup(self, centroid, now):
+        """_lookup with a miss cache: a settled point that found nothing (or only the held
+        target) is not probed again for 0.3 s within 10 px - a gap measurement can cost
+        20-30 hit-tests, far too much to repeat every 40 ms tick."""
         m = self.miss
         if m is not None and now - m[0] < 0.3 and math.hypot(centroid[0] - m[1], centroid[1] - m[2]) < 10:
-            return
+            return None
         t = _lookup(*centroid)
         if t is None:
             self.miss = (now, centroid[0], centroid[1])
-            return
-        _grab(t, "settled")
+        return t
 
     def place(self, held, gx, gy, now):
         if not _cfg["place"] or now - held.grab_ts < _cfg["place_ms"] / 1000.0:

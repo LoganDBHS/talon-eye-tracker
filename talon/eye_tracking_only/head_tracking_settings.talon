@@ -101,6 +101,16 @@ settings():
     # 1 = also grab small icons/labels that report no click behaviour (they
     # usually sit inside a button Windows did not report).
     user.magnet_passive = 1
+    # 1 = empty space next to buttons (title bar, end of a toolbar, taskbar) is
+    # a target too: a free strip whose short side is <= axis_snap_px snaps the
+    # cursor to its centre line (e.g. the tab-strip space you double-click to
+    # maximise Chrome). Wide-and-tall space (page body, desktop) never is.
+    user.magnet_gap_targets = 1
+    # empty space only wins when no clickable element is within this many px
+    # of the settled point. Lands in the gap when you meant the button next
+    # to it -> raise (32); cannot reach narrow gaps between buttons -> lower (16).
+    user.magnet_gap_clear_px = 24
+
     # Talon's control mouse runs in jump mode (45 mm dead zone): it will not
     # move the cursor 20 px on its own, so the magnet places the cursor itself
     # if it is not on the target after place_ms. 0 = never touch the cursor.
