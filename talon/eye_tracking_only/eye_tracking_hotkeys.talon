@@ -14,3 +14,6 @@ key(ctrl-alt-z): tracking.control_zoom_toggle()
 # calibration_guard.py adds progress text, ignores focus loss and reports how
 # the run ended (saved / cancelled / failed + why) in a banner and talon.log.
 key(ctrl-alt-c): user.calibration_toggle()
+
+# swap between the two most recent saved calibrations (glasses on / off); uploads at once
+key(ctrl-alt-shift-c): user.calibration_swap()

@@ -20,6 +20,7 @@ Also required: [talonhub/community](https://github.com/talonhub/community) clone
 | `Ctrl+Alt+E` | toggle control mouse (cursor follows gaze + head) |
 | `Ctrl+Alt+Z` | toggle zoom mouse |
 | `Ctrl+Alt+C` | run Talon's calibration; press again mid-run to cancel it. A banner reports how the run ended (saved / cancelled / failed and why) |
+| `Ctrl+Alt+Shift+C` | swap to the previous saved calibration (every saved run is copied to `%APPDATA%\talon\calib_backups\`); handy for glasses on / off |
 | `F4` | open zoom overlay at gaze point |
 | `Shift+F4` / `Esc` | cancel zoom |
 | left / right click (while zoomed) | commit left / right click at the gazed target |

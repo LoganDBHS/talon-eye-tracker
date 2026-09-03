@@ -17,9 +17,19 @@ methods (instance attributes only - the plugin file is untouched):
     what happened - SAVED, CANCELLED (how) or FAILED (which tracker command,
     which error, at which point) - and what to do next.
 
+  * every SAVED calibration is copied to %APPDATA%/talon/calib_backups/
+    calib-YYYYMMDD-HHMM.bin (Talon overwrites calib.bin on each run - three
+    calibrations were lost that way on 2026-09-03). ctrl-alt-shift-c swaps
+    to the most recent backup that differs from the one in use (glasses on /
+    glasses off) and uploads it to the tracker at once, no restart.
+
 Everything is also logged with the prefix [calibguard].
 """
+import hashlib
+import os
+import shutil
 import textwrap
+import threading
 import time
 
 from talon import Module, actions, app, canvas, cron, settings, ui
@@ -43,6 +53,71 @@ mod.setting("calibration_banner_seconds", type=float, default=15.0,
 
 TOTAL_POINTS = 9      # 1 centre + 4 edges + 4 corners (3 stages)
 _tobii = _em.tobii
+_BACKUP_DIR = os.path.join(os.path.dirname(_em.config.calib_file), "calib_backups")
+
+
+# --- calibration file backups -----------------------------------------------------
+
+def _digest(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha1(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _backups():
+    """[(path, digest)] newest first."""
+    try:
+        names = sorted(n for n in os.listdir(_BACKUP_DIR) if n.startswith("calib-") and n.endswith(".bin"))
+    except OSError:
+        return []
+    out = []
+    for n in reversed(names):
+        path = os.path.join(_BACKUP_DIR, n)
+        out.append((path, _digest(path)))
+    return out
+
+
+def _backup_current(reason):
+    """Copy calib.bin into the backup folder unless an identical copy is already there."""
+    src = _em.config.calib_file
+    d = _digest(src)
+    if d is None:
+        return None
+    for path, dg in _backups():
+        if dg == d:
+            return path
+    os.makedirs(_BACKUP_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M", time.localtime(os.path.getmtime(src)))
+    dst = os.path.join(_BACKUP_DIR, f"calib-{stamp}.bin")
+    k = 1
+    while os.path.exists(dst):
+        k += 1
+        dst = os.path.join(_BACKUP_DIR, f"calib-{stamp}-{k}.bin")
+    shutil.copy2(src, dst)
+    print(f"[calibguard] calibration backed up ({reason}): {dst}")
+    return dst
+
+
+def _restore(path):
+    """Make `path` the calibration in use: copy it over calib.bin and upload it to the tracker."""
+    tr = _em.tracker
+    if tr is None:
+        raise RuntimeError("no tracker attached")
+    with open(path, "rb") as f:
+        data = f.read()
+    shutil.copy2(path, _em.config.calib_file)
+
+    def upload():
+        try:
+            tr.cmd(_tobii.CALIBRATE_UPLOAD, data)
+            print(f"[calibguard] calibration restored and uploaded: {path} ({len(data)} bytes)")
+        except Exception as ex:
+            print(f"[calibguard] calibration upload FAILED: {ex!r} (calib.bin is replaced; a Talon restart loads it)")
+            cron.after("0ms", lambda: _show_banner([f"Calibration upload failed: {ex!r}",
+                                                    "calib.bin was replaced; restart Talon to load it."], "error"))
+    threading.Thread(target=upload, daemon=True).start()
 
 
 def _cmd_name(cmd):
@@ -186,6 +261,12 @@ def _report():
         kind = "ok"
         lines = [f"Calibration SAVED: {_st.points_done}/{TOTAL_POINTS} points, {c.data_size} bytes, {dur:.0f} s.",
                  "Next: ctrl-alt-m to re-measure the gaze gains, then Apply."]
+        try:
+            dst = _backup_current("saved")
+            if dst:
+                lines.append(f"Backed up to {os.path.basename(dst)} (ctrl-alt-shift-c swaps back to the previous one).")
+        except Exception as ex:
+            lines.append(f"Backup failed: {ex!r}")
     elif _st.error:
         kind = "error"
         name, ex = _st.error
@@ -292,5 +373,35 @@ class Actions:
             _st.reason = "cancelled by user.calibration_cancel"
             _em.calib_stop()
 
+    def calibration_swap():
+        """Switch to the most recent backed-up calibration that differs from the one in use (ctrl-alt-shift-c)"""
+        _close_banner()
+        try:
+            _backup_current("before swap")
+            current = _digest(_em.config.calib_file)
+            other = next((path for path, dg in _backups() if dg != current), None)
+            if other is None:
+                _show_banner(["No other calibration to swap to.",
+                              f"Backups live in {_BACKUP_DIR}; every saved ctrl-alt-c run adds one."], "warn")
+                return
+            _restore(other)
+            _show_banner([f"Calibration swapped to {os.path.basename(other)}.",
+                          "Uploading to the tracker; ctrl-alt-shift-c again swaps back."], "ok")
+        except Exception as ex:
+            print(f"[calibguard] swap failed: {ex!r}")
+            _show_banner([f"Calibration swap failed: {ex!r}"], "error")
+
+    def calibration_backups():
+        """List the backed-up calibration files in the log and a banner"""
+        current = _digest(_em.config.calib_file)
+        rows = [f"{os.path.basename(p)}{'  <- in use' if dg == current else ''}" for p, dg in _backups()]
+        for r in rows:
+            print(f"[calibguard] backup: {r}")
+        _show_banner(rows[:6] or ["No calibration backups yet."], "ok")
+
 
 _install()
+try:
+    _backup_current("startup")     # the calibration in use is always kept
+except Exception as _ex:
+    print(f"[calibguard] startup backup failed: {_ex!r}")
