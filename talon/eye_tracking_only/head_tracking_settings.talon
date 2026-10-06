@@ -131,7 +131,8 @@ settings():
     # 140 px short, bottom 50 px short, up over-reached mid-way, map rotated
     # +2.7 deg clockwise. Re-run ctrl-alt-m after any recalibration and paste
     # its SUGGEST lines here (the "residual" line tells you how well they work).
-    # last applied from ctrl-alt-m: 2026-09-02 11:00 (verdict: gain; previous file in C:\Users\logan\AppData\Roaming\talon\head_tracking_settings.backup)
+    # last applied from ctrl-alt-m: 2026-09-02 11:00 (verdict: gain; previous
+    # file kept as head_tracking_settings.backup in the Talon user dir)
     user.gaze_gain_left = 1.04
     user.gaze_curve_left = 0.00
     user.gaze_gain_right = 0.98
